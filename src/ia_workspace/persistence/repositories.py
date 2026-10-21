@@ -6,7 +6,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 
-from ia_workspace.domain.models import AgentKind, ChatLink, NewProject, Project, WorkspaceState
+from ia_workspace.domain.models import AgentKind, ChatLink, NewProject, Project, PromptTransfer, WorkspaceState
 from ia_workspace.persistence.database import Database
 
 
@@ -160,6 +160,57 @@ class ChatLinkRepository:
     def remove(self, link_id: int) -> None:
         with self._conn:
             self._conn.execute("DELETE FROM chat_links WHERE id = ?", (link_id,))
+
+
+class PromptTransferRepository:
+    def __init__(self, db: Database) -> None:
+        self._conn = db.conn
+
+    @staticmethod
+    def _row(row: sqlite3.Row) -> PromptTransfer:
+        return PromptTransfer(
+            id=row["id"],
+            project_id=row["project_id"],
+            agent=AgentKind(row["agent"]),
+            prompt=row["prompt"],
+            session_id=row["session_id"],
+            method=row["method"],
+            status=row["status"],
+            detail=row["detail"],
+            created_at=_parse_dt(row["created_at"]),
+        )
+
+    def add(
+        self,
+        project_id: int,
+        agent: AgentKind,
+        prompt: str,
+        session_id: str | None,
+        method: str,
+        status: str,
+        detail: str = "",
+    ) -> PromptTransfer:
+        with self._conn:
+            cur = self._conn.execute(
+                "INSERT INTO prompt_transfers "
+                "(project_id, agent, prompt, session_id, method, status, detail, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (project_id, agent.value, prompt, session_id, method, status, detail, _now()),
+            )
+        transfer = self.get(int(cur.lastrowid))
+        assert transfer is not None
+        return transfer
+
+    def get(self, transfer_id: int) -> PromptTransfer | None:
+        row = self._conn.execute("SELECT * FROM prompt_transfers WHERE id = ?", (transfer_id,)).fetchone()
+        return self._row(row) if row else None
+
+    def list(self, project_id: int) -> list[PromptTransfer]:
+        """Transferencias de un único proyecto, la más reciente primero."""
+        rows = self._conn.execute(
+            "SELECT * FROM prompt_transfers WHERE project_id = ? ORDER BY id DESC", (project_id,)
+        ).fetchall()
+        return [self._row(r) for r in rows]
 
 
 class WorkspaceStateRepository:

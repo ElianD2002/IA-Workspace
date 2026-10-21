@@ -12,7 +12,7 @@ from __future__ import annotations
 from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
 from ia_workspace.agents.auth import AuthState
-from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind, Project
+from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind, Project, PromptTransfer
 from ia_workspace.services.chat_links import kind_of
 from ia_workspace.services.chatgpt_links import parse_chat_link
 from ia_workspace.services.detection import inspect_folder
@@ -409,7 +409,7 @@ class WorkspaceView(Page):
         self._transfer = Gtk.Button()
         self._transfer.set_child(Adw.ButtonContent(icon_name="mail-send-symbolic", label="Transferir…"))
         self._transfer.add_css_class("suggested-action")
-        self._transfer.connect("clicked", lambda _b: self._start_session(with_prompt=True))
+        self._transfer.connect("clicked", lambda _b: self.request_transfer())
         bar.append(self._transfer)
         pane.append(bar)
         self._update_prompt_meta()
@@ -439,20 +439,85 @@ class WorkspaceView(Page):
     def _update_transfer_sensitivity(self) -> None:
         if not hasattr(self, "_transfer"):
             return
-        if not self.ctx.simulated_agents:
-            self._transfer.set_sensitive(False)
-            self._transfer.set_tooltip_text(
-                "La transferencia a agentes se habilitará con las integraciones reales"
-            )
-            return
         ready = bool(self.state.prompt_draft.strip()) and self._selected_agent() is not None
         self._transfer.set_sensitive(ready)
-        self._transfer.set_tooltip_text("Iniciar una sesión simulada con este prompt")
+        if self.ctx.simulated_agents:
+            self._transfer.set_tooltip_text("Iniciar una sesión simulada con este prompt")
+        else:
+            self._transfer.set_tooltip_text("Revisar y transferir este prompt al agente elegido")
 
     def focus_prompt(self) -> None:
         if not self.state.show_prompt:
             self._panel_switches["show_prompt"].set_active(True)
         self._prompt.grab_focus()
+
+    # ---- transferencia de prompts a agentes --------------------------------------------
+    #
+    # Siempre crea una sesión nueva con el prompt como instrucción inicial (mecanismo
+    # oficial de cada CLI, ver agents/tools.py): nunca se escribe en la entrada de una
+    # sesión ya en marcha, así que no hace falta comprobar si está «lista».
+
+    def request_transfer(self) -> None:
+        """Abre el diálogo de revisión antes de transferir el prompt al agente elegido."""
+        kind = self._selected_agent()
+        prompt = self.state.prompt_draft.strip()
+        if kind is None:
+            self.nav.toast("Este proyecto no tiene agentes habilitados.")
+            return
+        if not prompt:
+            self.nav.toast("Escribe un prompt antes de transferir.")
+            return
+        from ia_workspace.ui.dialogs.transfer_prompt import TransferPromptDialog
+
+        direct = self.ctx.agents.status(kind).tool.supports_direct_prompt
+        dialog = TransferPromptDialog(
+            project_name=self.project.name,
+            project_path=self.project.path,
+            kind=kind,
+            prompt=prompt,
+            direct=direct,
+            on_confirm=lambda method: self._execute_transfer(kind, prompt, method),
+        )
+        dialog.present(self.get_root())
+        self._last_dialog = dialog
+
+    def _execute_transfer(self, kind: AgentKind, prompt: str, method: str) -> None:
+        self._agent_seq[kind] = self._agent_seq.get(kind, 0) + 1
+        title = prompt.splitlines()[0][:60] if method == "direct" else f"{kind.label} {self._agent_seq[kind]}"
+        spec = SessionSpec(
+            project_id=self.project.id,
+            kind=kind,
+            cwd=self.project.path,
+            title=title,
+            initial_prompt=prompt if method == "direct" else None,
+        )
+        try:
+            info = self.ctx.sessions.start(spec)
+        except SessionError as exc:
+            self.ctx.prompt_transfers.record(self.project.id, kind, prompt, None, method, "error", str(exc))
+            self.nav.toast(str(exc))
+            return
+
+        if method == "direct" and self.ctx.simulated_agents and info.state.is_active:
+            # El backend simulado no entiende el prompt incrustado en el argv de la CLI
+            # (no lanza ninguna CLI): se lo escribimos a la sesión que acabamos de crear,
+            # nunca a una ya existente.
+            self.ctx.sessions.send_input(info.id, prompt)
+
+        status = "error" if info.state is SessionState.ERROR else ("sent" if method == "direct" else "copied")
+        self.ctx.prompt_transfers.record(
+            self.project.id, kind, prompt, info.id, method, status, info.detail if status == "error" else ""
+        )
+        if method == "manual":
+            self.get_clipboard().set(prompt)
+            self.nav.toast(f"Prompt copiado. Pégalo en la sesión de {kind.label} en cuanto esté lista.")
+        elif status == "error":
+            self.nav.toast(f"No se pudo transferir el prompt: {info.detail}")
+        if status != "error":
+            self.state.prompt_draft = ""
+            self._prompt.get_buffer().set_text("")
+            self._changed()
+        self._select_session(info.id)
 
     # ---- sesiones -------------------------------------------------------------------
     #
@@ -881,6 +946,7 @@ class WorkspaceView(Page):
                 detail = f" — {event.session.detail}" if event.session.detail else ""
                 buffer.insert(buffer.get_end_iter(), f"[{event.session.state.label}{detail}]\n")
         self._render_sessions()
+        self._render_tasks()  # una fila de «Tareas» puede mostrar el estado en vivo de su sesión
 
     def _scroll_log_to_end(self) -> bool:
         adj = self._log_scroll.get_vadjustment()
@@ -900,10 +966,20 @@ class WorkspaceView(Page):
         pane.append(_pane_header(self._ctx_toggle))
 
         self._ctx_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
-        self._ctx_stack.add_named(
+
+        self._tasks_stack = Gtk.Stack()
+        tasks_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, margin_start=12, margin_end=12,
+                            margin_top=12, margin_bottom=12)
+        self._tasks_list = w.boxed_list()
+        tasks_box.append(self._tasks_list)
+        self._tasks_stack.add_named(
             _compact_status("view-list-bullet-symbolic", "Sin tareas", "Transfiere un prompt para crear la primera."),
-            "tasks",
+            "empty",
         )
+        self._tasks_stack.add_named(
+            Gtk.ScrolledWindow(child=tasks_box, hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True), "list"
+        )
+        self._ctx_stack.add_named(self._tasks_stack, "tasks")
 
         memory = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_start=12, margin_end=12,
                          margin_top=12, margin_bottom=12)
@@ -927,7 +1003,43 @@ class WorkspaceView(Page):
                                                      vexpand=True), "memory")
         self._ctx_stack.set_visible_child_name(self.state.context_tab)
         pane.append(self._ctx_stack)
+        self.ctx.prompt_transfers.subscribe(self._on_transfers_changed)
+        self._render_tasks()
         return pane
+
+    def _on_transfers_changed(self, project_id: int) -> None:
+        if project_id == self.project.id:  # nunca se mezclan tareas entre proyectos
+            self._render_tasks()
+
+    def _render_tasks(self) -> None:
+        transfers = self.ctx.prompt_transfers.list(self.project.id)
+        w.clear_box(self._tasks_list)
+        for transfer in transfers:
+            self._tasks_list.append(self._task_row(transfer))
+        self._tasks_stack.set_visible_child_name("list" if transfers else "empty")
+
+    def _task_row(self, transfer: PromptTransfer) -> Gtk.Widget:
+        first_line = next((line.strip() for line in transfer.prompt.splitlines() if line.strip()), transfer.prompt)
+        method_label = "Transferencia directa" if transfer.method == "direct" else "Copiado para pegar"
+        live = self.ctx.sessions.get(transfer.session_id) if transfer.session_id else None
+        row = Adw.ActionRow(
+            title=first_line,
+            subtitle=f"{transfer.agent.label} · {method_label} · {w.relative_time(transfer.created_at)}",
+            activatable=live is not None,
+        )
+        row.add_prefix(w.tool_chip(transfer.agent))
+        if live is not None:
+            live_terminal = w.is_live_terminal(self.ctx.sessions, live.id)
+            row.add_suffix(w.session_pill(live.state, live_terminal))
+            row.set_tooltip_text("Ir a esta sesión")
+            row.connect("activated", lambda _r, sid=transfer.session_id: self._select_session(sid))
+        else:
+            styles = {"sent": "idle", "copied": "idle", "error": "error"}
+            labels = {"sent": "Enviado", "copied": "Copiado", "error": "Error al transferir"}
+            row.add_suffix(w.status_pill(labels[transfer.status], styles[transfer.status]))
+            if transfer.status == "error" and transfer.detail:
+                row.set_tooltip_text(transfer.detail)
+        return row
 
     def _on_context_tab(self, *_args: object) -> None:
         name = self._ctx_toggle.get_active_name()
@@ -970,6 +1082,7 @@ class WorkspaceView(Page):
         if not info.context_files:
             self._context_files.append(w.info_row("No hay AGENTS.md, CLAUDE.md ni GEMINI.md en la carpeta."))
         self._render_sessions()
+        self._render_tasks()
 
     # ---- estado ---------------------------------------------------------------------
 

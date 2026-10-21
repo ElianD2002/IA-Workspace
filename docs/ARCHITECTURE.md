@@ -148,6 +148,63 @@ VteTerminalBackend(kind, argv_builder) ─► agents.tools.build_launch_argv / b
 - El selector «Asignar a» y el botón «Transferir…» del panel Prompt siguen reservados para
   la transferencia de prompts (fase posterior).
 
+## Transferencia de prompts a agentes (fase 2B.2)
+
+```
+«Transferir…» ─► WorkspaceView.request_transfer()
+                    │  (TransferPromptDialog: proyecto, agente, prompt completo, confirmar)
+                    ▼ on_confirm(method)
+              WorkspaceView._execute_transfer(kind, prompt, method)
+                    │
+                    ▼
+    SessionManager.start(SessionSpec(kind, cwd=carpeta del proyecto,
+                                     initial_prompt=prompt si method == "direct"))
+                    │
+                    ▼
+    VteTerminalBackend ─► agents.tools.build_launch_argv(kind, prompt=…)
+                    │
+                    ▼
+    ctx.prompt_transfers.record(proyecto, agente, prompt, sesión, method, status)
+```
+
+- **Siempre una sesión nueva.** La transferencia nunca escribe en una sesión ya en marcha
+  (no hay forma fiable de saber si está lista para recibir texto): construye un
+  `SessionSpec` con `initial_prompt` y dependerá del mecanismo oficial de la CLI, igual
+  que el resto de sesiones de la fase 2B.1. Reutiliza por completo `SessionManager`,
+  `VteTerminalBackend` y el ciclo de vida (continuidad entre proyectos, detener, cerrar,
+  cierre controlado): no hay código nuevo de procesos.
+- **Mecanismo oficial por agente** (verificado con `--help` y, lanzando cada CLI en un
+  terminal real hasta su primera pantalla de confirmación, sin aceptarla ni enviar nada
+  al modelo — ver el docstring de `agents/tools.py` para el detalle completo):
+  - Claude Code y Codex: `[prompt]` como argumento posicional, precedido de un `--`
+    literal (la forma estándar de Commander.js y de clap para que un prompt que empiece
+    por «-» nunca se confunda con una opción).
+  - Antigravity: `--prompt-interactive <texto>`.
+  - El texto viaja como un único elemento de `argv` (`Vte.Terminal.spawn_async` usa
+    `execve`, no un intérprete de órdenes): ningún carácter especial, comilla, barra
+    invertida o salto de línea necesita escaparse ni puede alterar el comando.
+  - `build_launch_argv` valida las *opciones* antes de añadir el prompt, así que el
+    contenido del prompt nunca puede disparar `UnsafeArgumentError` por casualidad (por
+    ejemplo, al mencionar la palabra «dangerously» en una frase normal).
+- **Alternativa manual.** Si una herramienta no tuviera mecanismo directo
+  (`AgentTool.supports_direct_prompt` falso), el diálogo ofrece «Copiar y abrir agente»:
+  copia el prompt al portapapeles y abre una sesión nueva sin prompt incrustado, para
+  pegarlo a mano. Hoy los tres agentes admiten transferencia directa; el mecanismo manual
+  se conserva para herramientas futuras y se prueba forzándolo con una `AgentTool` sin
+  mecanismo de prompt.
+- **Registro, sin atribuir éxito.** La tabla `prompt_transfers` (migración 3) guarda
+  proyecto, agente, prompt completo, el id de sesión (mientras exista en esta ejecución),
+  el método (`direct`/`manual`) y un `status` que solo describe si el prompt se envió o se
+  copió (`sent`/`copied`/`error`) — nunca si el agente completó la tarea. El progreso real
+  se sigue por separado, en el estado de la sesión (`sessions.models.SessionState`).
+- **Interfaz.** La pestaña «Tareas» del panel derecho (antes un estado vacío fijo) lista
+  las transferencias del proyecto activo, con el estado en vivo de su sesión cuando sigue
+  existiendo esta ejecución; al pulsar una fila se vuelve a esa sesión. Es la misma pestaña
+  del prototipo, sin pantallas nuevas.
+- **Errores sin perder el prompt.** Si la sesión termina en `ERROR` (herramienta ausente,
+  opción no permitida…), el borrador del editor no se vacía y la transferencia queda
+  registrada con `status="error"` y el detalle del fallo.
+
 ## Corrección unificada tras las primeras pruebas reales
 
 - **Panel derecho plegable.** Hay un botón en el extremo derecho de la cabecera del
@@ -185,8 +242,8 @@ VteTerminalBackend(kind, argv_builder) ─► agents.tools.build_launch_argv / b
 
 - `persistence/database.py`: migraciones en `MIGRATIONS`, solo se añaden al final y se
   registran en `PRAGMA user_version`. Una base de datos más nueva que el código se rechaza.
-- Tablas actuales: `projects`, `project_ui_state` (JSON del `WorkspaceState`), `settings`
-  y `chat_links` (desde la migración 2).
+- Tablas actuales: `projects`, `project_ui_state` (JSON del `WorkspaceState`), `settings`,
+  `chat_links` (desde la migración 2) y `prompt_transfers` (desde la migración 3).
 - El estado visual se acumula en memoria (`mark_dirty`) y se escribe cada 5 s y al salir.
 
 ## Correspondencia con el prototipo (`docs/design/`)

@@ -120,7 +120,7 @@ class IAWorkspaceApplication(Adw.Application):
                 def build(spec: SessionSpec) -> list[str]:
                     if spec.mode == "login":
                         return build_login_argv(kind, which=ctx.agents.which)
-                    return build_launch_argv(kind, spec.args, which=ctx.agents.which)
+                    return build_launch_argv(kind, spec.args, prompt=spec.initial_prompt, which=ctx.agents.which)
 
                 return build
 

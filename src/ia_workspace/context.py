@@ -11,11 +11,13 @@ from ia_workspace.persistence.database import Database
 from ia_workspace.persistence.repositories import (
     ChatLinkRepository,
     ProjectRepository,
+    PromptTransferRepository,
     SettingsRepository,
     WorkspaceStateRepository,
 )
 from ia_workspace.services.chat_links import ChatLinkService
 from ia_workspace.services.projects import ProjectService
+from ia_workspace.services.prompt_transfers import PromptTransferService
 from ia_workspace.services.workspace import WorkspaceController
 from ia_workspace.sessions.manager import Dispatch, Schedule, SessionManager, _direct, _no_timer
 
@@ -30,6 +32,7 @@ class AppContext:
     sessions: SessionManager
     agents: AgentCatalog
     chat_links: ChatLinkService
+    prompt_transfers: PromptTransferService
     simulated_agents: bool = False
 
     @classmethod
@@ -57,6 +60,7 @@ class AppContext:
             sessions=sessions,
             agents=AgentCatalog(dispatch=dispatch),
             chat_links=ChatLinkService(ChatLinkRepository(db)),
+            prompt_transfers=PromptTransferService(PromptTransferRepository(db)),
             simulated_agents=simulated_agents,
         )
 

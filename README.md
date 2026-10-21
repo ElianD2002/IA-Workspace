@@ -4,10 +4,11 @@ Aplicación nativa para Linux (GTK 4 + Libadwaita) para gestionar proyectos loca
 coordinar agentes de IA —Claude Code, Codex y Google Antigravity— junto con
 conversaciones vinculadas de ChatGPT y memoria independiente por proyecto.
 
-> **Estado: fase 2B.1 — agentes oficiales.** Proyectos en SQLite, workspaces
-> independientes, terminales VTE persistentes y sesiones de Claude Code, Codex y Google
-> Antigravity mediante sus CLI oficiales. Todavía no hay transferencia automática de
-> prompts, cerebro compartido ni orquestación.
+> **Estado: fase 2B.2 — transferencia de prompts.** Proyectos en SQLite, workspaces
+> independientes, terminales VTE persistentes, sesiones de Claude Code, Codex y Google
+> Antigravity mediante sus CLI oficiales, y transferencia del editor de prompts a una
+> sesión nueva de cualquiera de los tres. Todavía no hay cerebro compartido ni
+> orquestación.
 
 ## Requisitos (paquetes del sistema)
 
@@ -48,6 +49,19 @@ En el workspace, el botón **+** de sesiones abre una terminal y su flecha **⌄
 iniciar un agente. La CLI se lanza en la carpeta del proyecto, sin opciones que omitan
 permisos ni aprobaciones, y con tu suscripción e inicio de sesión. El estado de sesión
 solo se consulta al abrir ese menú o con **Preferencias → Integraciones → Comprobar**.
+
+### Transferir un prompt a un agente
+
+En el panel Prompt, elige el agente en **Asignar a** y pulsa **Transferir…**. Un diálogo
+de revisión muestra el proyecto, el agente y el prompt completo antes de confirmar nada.
+Al confirmar se abre una sesión **nueva** del agente en la carpeta del proyecto, con el
+prompt como instrucción inicial mediante el mecanismo oficial de su CLI (nunca se escribe
+después en una sesión ya en marcha). Claude Code, Codex y Antigravity admiten los tres
+este mecanismo; si un agente no lo tuviera, el botón ofrecería «Copiar y abrir agente» en
+su lugar. Cada transferencia queda registrada —proyecto, agente, prompt completo, sesión
+y fecha— y aparece en la pestaña **Tareas** del panel derecho, desde donde se puede volver
+a la sesión. El registro nunca da por completada una tarea: solo indica si el prompt se
+envió o se copió; el progreso real se sigue en el estado de la sesión.
 
 ### Conversaciones de ChatGPT
 

@@ -109,6 +109,27 @@ class ChatLink:
     created_at: datetime | None = None
 
 
+@dataclass(frozen=True)
+class PromptTransfer:
+    """Registro de un intento de transferencia de un prompt a un agente.
+
+    ``status`` solo describe el resultado inmediato de la transferencia (si el
+    comando se lanzó o se copió), nunca si el agente completó la tarea: eso lo
+    sigue decidiendo el estado real de la sesión (``session_id``), mientras exista
+    en esta ejecución de IA Workspace.
+    """
+
+    id: int
+    project_id: int
+    agent: AgentKind
+    prompt: str
+    session_id: str | None
+    method: str  # "direct" (mecanismo oficial de la CLI) | "manual" (copiar y pegar)
+    status: str  # "sent" | "copied" | "error"
+    detail: str
+    created_at: datetime | None = None
+
+
 @dataclass
 class WorkspaceState:
     """Estado visual de un workspace. Se guarda por proyecto y nunca se comparte."""

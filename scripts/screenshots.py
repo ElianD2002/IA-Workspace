@@ -127,6 +127,17 @@ def main() -> None:
                                 "Esquema de facturación (compartido)")
             win.open_project(ids[0])
             capture(win, f"{scheme}-05-workspace")
+
+            # Transferencia de un prompt a un agente: diálogo de revisión y pestaña «Tareas».
+            view._prompt.get_buffer().set_text("Agrega pruebas automatizadas para el checkout.")
+            view._agent_picker.set_selected(0)
+            view.request_transfer()
+            capture(win, f"{scheme}-05e-transferir")
+            view._last_dialog.confirm_button.emit("clicked")
+            pump(0.5)
+            view._ctx_toggle.set_active_name("tasks")
+            capture(win, f"{scheme}-05f-tareas")
+
             win.set_default_size(1024, 768)
             view.request_link_conversation()
             view._last_dialog.url_row.set_text("https://chatgpt.com/share/0f0e0d0c-0b0a-8000-9999-aabbccddeeff")

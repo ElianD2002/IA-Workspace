@@ -58,6 +58,25 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         """,
         "CREATE INDEX chat_links_project ON chat_links(project_id, id)",
     ),
+    # 3 — registro de transferencias de prompts a agentes: proyecto, agente, prompt
+    #     completo, sesión y resultado inmediato de la transferencia (nunca si la
+    #     tarea se completó; eso lo decide el estado real de la sesión).
+    (
+        """
+        CREATE TABLE prompt_transfers (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            agent       TEXT    NOT NULL,
+            prompt      TEXT    NOT NULL CHECK (length(trim(prompt)) > 0),
+            session_id  TEXT,
+            method      TEXT    NOT NULL CHECK (method IN ('direct', 'manual')),
+            status      TEXT    NOT NULL CHECK (status IN ('sent', 'copied', 'error')),
+            detail      TEXT    NOT NULL DEFAULT '',
+            created_at  TEXT    NOT NULL
+        )
+        """,
+        "CREATE INDEX prompt_transfers_project ON prompt_transfers(project_id, id DESC)",
+    ),
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

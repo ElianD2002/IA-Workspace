@@ -36,7 +36,7 @@ if python3 -m ruff --version >/dev/null 2>&1; then
 fi
 
 echo "== Pruebas de lógica"
-(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process test_agents test_fixes)
+(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process test_agents test_fixes test_prompt_transfer)
 
 source "$ROOT/scripts/_broadway.sh"
 if start_broadway; then
@@ -62,6 +62,7 @@ run_ui_test test_ui "Prueba de interfaz"
 run_ui_test test_terminals "Terminales VTE reales"
 run_ui_test test_agents_ui "Agentes con CLI falsas"
 run_ui_test test_workspace_ui "Panel derecho y conversaciones"
+run_ui_test test_prompt_transfer_ui "Transferencia de prompts a agentes"
 
 # Ningún dato de cuenta (de los dobles de prueba) debe acabar en registros.
 if grep -rIl -E "persona@example\.invalid|FAKE-ORG-SECRET-123" "$ROOT/var"/*.log 2>/dev/null; then

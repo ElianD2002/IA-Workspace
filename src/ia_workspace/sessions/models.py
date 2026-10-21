@@ -80,6 +80,10 @@ class SessionSpec:
     args: tuple[str, ...] = ()
     # "interactive": sesión de trabajo. "login": flujo oficial de inicio de sesión.
     mode: str = "interactive"
+    # Prompt inicial para una sesión nueva, transmitido por el mecanismo oficial de
+    # la CLI (nunca escrito después en una sesión ya en marcha). ``None`` si la
+    # sesión no transfiere ningún prompt (terminal simple, inicio de sesión, etc.).
+    initial_prompt: str | None = None
 
 
 @dataclass
