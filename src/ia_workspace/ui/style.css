@@ -1,0 +1,186 @@
+/* IA Workspace — complementos visuales sobre Libadwaita.
+ * Traduce la identidad del prototipo (docs/design/) a CSS de GTK4.
+ * Los colores base vienen del tema de Libadwaita; aquí solo se definen
+ * los elementos propios: insignias de proyecto, chips de agente y estados. */
+
+.mono {
+  font-family: "JetBrains Mono", "Adwaita Mono", monospace;
+}
+
+/* ---- Insignia de proyecto (cuadrado redondeado con iniciales) ---- */
+.proj-badge {
+  color: white;
+  font-weight: 800;
+  border-radius: 6px;
+  min-width: 22px;
+  min-height: 22px;
+  font-size: 10px;
+}
+.proj-badge.md {
+  border-radius: 10px;
+  min-width: 40px;
+  min-height: 40px;
+  font-size: 14px;
+}
+.proj-badge.lg {
+  border-radius: 11px;
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 15px;
+}
+
+/* Paleta de proyectos (mismo orden que domain.models.PROJECT_COLORS). */
+.proj-c0 { background-color: #1c63c4; }
+.proj-c1 { background-color: #b5501f; }
+.proj-c2 { background-color: #22714f; }
+.proj-c3 { background-color: #7d47a8; }
+.proj-c4 { background-color: #1c6f80; }
+.proj-c5 { background-color: #a51d6b; }
+.proj-c6 { background-color: #8a6a00; }
+.proj-c7 { background-color: #505057; }
+
+/* ---- Chip de herramienta (CC, CX, AG, GPT, $_) ---- */
+.tool-chip {
+  color: white;
+  border-radius: 6px;
+  min-width: 22px;
+  min-height: 22px;
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 700;
+  font-size: 9px;
+}
+.tool-claude_code { background-color: #b5501f; }
+.tool-codex { background-color: #6b3fa0; }
+.tool-antigravity { background-color: #1c6f80; }
+.tool-gpt { background-color: #2d7a52; }
+.tool-shell { background-color: #505057; }
+
+/* ---- Píldora de estado ---- */
+.status-pill {
+  border-radius: 12px;
+  padding: 2px 10px;
+  min-height: 20px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.status-pill.working {
+  color: var(--accent-color);
+  background-color: color-mix(in srgb, var(--accent-bg-color) 20%, transparent);
+}
+.status-pill.wait {
+  color: var(--warning-color);
+  background-color: color-mix(in srgb, var(--warning-bg-color) 24%, transparent);
+}
+.status-pill.done {
+  color: var(--success-color);
+  background-color: color-mix(in srgb, var(--success-bg-color) 22%, transparent);
+}
+.status-pill.error {
+  color: var(--error-color);
+  background-color: color-mix(in srgb, var(--error-bg-color) 28%, transparent);
+}
+.status-pill.idle,
+.status-pill.off {
+  color: color-mix(in srgb, currentColor 66%, transparent);
+  background-color: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+/* ---- Punto de estado ---- */
+.status-dot {
+  min-width: 8px;
+  min-height: 8px;
+  border-radius: 999px;
+  background-color: color-mix(in srgb, currentColor 55%, transparent);
+}
+.status-dot.working { background-color: var(--accent-bg-color); }
+.status-dot.wait { background-color: #e5a50a; }
+.status-dot.done { background-color: #26a269; }
+.status-dot.error { background-color: #e01b24; }
+
+/* ---- Barra lateral ---- */
+.sidebar-section {
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.66;
+  margin: 14px 6px 4px 12px;
+}
+.sidebar-badge {
+  min-width: 20px;
+  min-height: 20px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 0 6px;
+  color: var(--warning-color);
+  background-color: color-mix(in srgb, var(--warning-bg-color) 24%, transparent);
+}
+
+/* ---- Tarjetas y bloques de inicio ---- */
+.group-title {
+  font-size: 17px;
+  font-weight: 700;
+}
+.continue-card {
+  padding: 16px;
+}
+.card-info {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background-color: color-mix(in srgb, currentColor 7%, transparent);
+}
+
+/* ---- Workspace ---- */
+.pane-header {
+  min-height: 46px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+.pane-title {
+  font-weight: 700;
+}
+.side-pane {
+  background-color: var(--sidebar-bg-color);
+}
+.prompt-view {
+  font-family: "JetBrains Mono", "Adwaita Mono", monospace;
+  font-size: 13px;
+  padding: 10px 12px;
+  background: transparent;
+}
+.context-chip {
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  background-color: color-mix(in srgb, currentColor 10%, transparent);
+}
+.sim-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--warning-color);
+  background-color: color-mix(in srgb, var(--warning-bg-color) 20%, transparent);
+}
+.phase-label {
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 12px;
+  padding: 2px 10px;
+  color: var(--accent-color);
+  background-color: color-mix(in srgb, var(--accent-bg-color) 16%, transparent);
+}
+.session-tab {
+  padding: 2px 8px;
+  min-height: 30px;
+}
+.sidebar-footer {
+  margin: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.terminal-log {
+  font-family: "JetBrains Mono", "Adwaita Mono", monospace;
+  font-size: 12.5px;
+  padding: 8px 12px;
+}

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ia-workspace"
+version = "0.1.0"
+description = "Gestor nativo de proyectos y orquestador de agentes de IA para Linux (GTK4 + Libadwaita)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Propietaria" }
+authors = [{ name = "Elian Martinez" }]
+# PyGObject, GTK 4 y Libadwaita se toman del sistema (paquetes de la distribución):
+# python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1. No se declaran aquí para no compilarlos con pip.
+dependencies = []
+
+[project.gui-scripts]
+ia-workspace = "ia_workspace.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ia_workspace = ["ui/*.css"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

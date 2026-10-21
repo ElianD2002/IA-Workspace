@@ -1,0 +1,43 @@
+# --- Datos locales de desarrollo -------------------------------------------------
+# Base SQLite, capturas, carpetas de demostración, temporales de pruebas y logs.
+var/
+
+# Por si alguna base de datos o log queda fuera de var/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.log
+
+# --- Credenciales y configuración privada (nunca deben versionarse) ----------------
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.*
+credentials.*
+
+# --- Python y herramientas ---------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- Editores y sistema --------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store

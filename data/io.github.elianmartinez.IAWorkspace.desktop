@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=IA Workspace
+Comment=Gestiona proyectos y coordina agentes de IA
+Exec=ia-workspace
+Icon=applications-engineering-symbolic
+Terminal=false
+Categories=Development;GTK;GNOME;
+Keywords=IA;agentes;Claude;Codex;Antigravity;ChatGPT;proyectos;
+StartupNotify=true
+DBusActivatable=false

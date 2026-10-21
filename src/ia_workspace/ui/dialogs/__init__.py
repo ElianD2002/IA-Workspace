@@ -1,0 +1,1 @@
+"""Diálogos de la aplicación."""
