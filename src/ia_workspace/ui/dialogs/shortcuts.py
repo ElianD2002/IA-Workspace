@@ -10,6 +10,7 @@ SECTIONS = (
     ("General", (
         ("Agregar proyecto", "<Control>o"),
         ("Nuevo prompt", "<Control>n"),
+        ("Nueva terminal en el proyecto activo", "<Control><Shift>t"),
         ("Mostrar u ocultar barra lateral", "F9"),
         ("Menú principal", "F10"),
         ("Preferencias", "<Control>comma"),

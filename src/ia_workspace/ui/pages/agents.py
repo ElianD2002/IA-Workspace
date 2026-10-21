@@ -55,7 +55,7 @@ class AgentsPage(Page):
             for s in mine:
                 row = Adw.ActionRow(title=s.spec.title or s.spec.kind.label, subtitle=s.spec.kind.label)
                 row.add_prefix(w.tool_chip(s.spec.kind))
-                row.add_suffix(w.session_pill(s.state))
+                row.add_suffix(w.session_pill(s.state, s.spec.kind))
                 if s.state.is_active:
                     stop = Gtk.Button(icon_name="media-playback-stop-symbolic", valign=Gtk.Align.CENTER,
                                       tooltip_text="Detener sesión")

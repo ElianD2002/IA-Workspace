@@ -7,7 +7,7 @@ import unittest
 import helpers  # noqa: F401  (añade src/ al path)
 
 from ia_workspace.domain.models import AgentKind
-from ia_workspace.sessions import SessionBackend, SessionHandle
+from ia_workspace.sessions import SessionBackend, SessionHandle, ViewableHandle
 from ia_workspace.sessions.manager import SessionError, SessionManager
 from ia_workspace.sessions.models import SessionEvent, SessionSpec, SessionState
 from ia_workspace.sessions.simulated import SimulatedBackend
@@ -113,6 +113,34 @@ class SessionManagerTests(unittest.TestCase):
         with self.assertRaises(SessionError):
             self.manager.send_input(info.id, "x")
         self.assertEqual(self.events[-1].kind, "removed")
+
+    def test_handle_survives_exit_until_removed(self) -> None:
+        disposed: list[bool] = []
+
+        class ViewHandle(FakeHandle):
+            def widget(self) -> object:
+                return "widget"
+
+            def dispose(self) -> None:
+                disposed.append(True)
+
+        class ViewBackend(FakeBackend):
+            def start(self, spec, sink):
+                handle = ViewHandle(sink)
+                self.handles.append(handle)
+                return handle
+
+        self.manager.register_backend(ViewBackend(AgentKind.SHELL))
+        info = self.manager.start(spec(1, AgentKind.SHELL))
+        handle = self.manager.handle(info.id)
+        self.assertIsInstance(handle, ViewableHandle)
+        self.manager.stop(info.id)
+        self.assertEqual(info.state, SessionState.STOPPED)
+        self.assertIs(self.manager.handle(info.id), handle, "la salida final debe seguir accesible")
+        self.assertEqual(disposed, [])
+        self.manager.remove(info.id)
+        self.assertIsNone(self.manager.handle(info.id))
+        self.assertEqual(disposed, [True])
 
     def test_terminal_state_is_final(self) -> None:
         info = self.manager.start(spec(1))

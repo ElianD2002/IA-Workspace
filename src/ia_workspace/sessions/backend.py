@@ -39,6 +39,21 @@ class SessionHandle(Protocol):
 
 
 @runtime_checkable
+class ViewableHandle(Protocol):
+    """Handle que además ofrece un widget propio (p. ej. una terminal VTE).
+
+    El widget pertenece al handle, no a la vista: la vista solo lo muestra. Así,
+    ocultar o cambiar de workspace nunca destruye la terminal ni su proceso.
+    """
+
+    def widget(self) -> object: ...
+
+    def dispose(self) -> None:
+        """Libera el widget. Solo se llama al descartar una sesión ya terminada."""
+        ...
+
+
+@runtime_checkable
 class SessionBackend(Protocol):
     kind: AgentKind
 

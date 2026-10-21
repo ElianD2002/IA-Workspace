@@ -1,4 +1,4 @@
-"""Confirmación de salida con agentes activos."""
+"""Confirmación de salida con terminales o agentes activos."""
 
 from __future__ import annotations
 
@@ -6,21 +6,28 @@ from gi.repository import Adw
 
 from ia_workspace.context import AppContext
 from ia_workspace.sessions.models import SessionInfo
+from ia_workspace.ui.widgets import session_label
 
 
 def build_confirm_quit_dialog(ctx: AppContext, active: list[SessionInfo]) -> Adw.AlertDialog:
     names = {p.id: p.name for p in ctx.projects.list()}
     lines = [
-        f"• {s.spec.kind.label} en «{names.get(s.project_id, '—')}» — {s.state.label.lower()}"
+        f"• {s.spec.title or s.spec.kind.label} en «{names.get(s.project_id, '—')}» — "
+        f"{session_label(s.state, s.spec.kind).lower()}"
         for s in active[:6]
     ]
     if len(active) > 6:
         lines.append(f"• y {len(active) - 6} más")
     count = len(active)
     dialog = Adw.AlertDialog(
-        heading=f"¿Cerrar IA Workspace con {count} agente{'s' if count != 1 else ''} activo{'s' if count != 1 else ''}?",
+        heading=(
+            f"¿Cerrar IA Workspace con {count} sesión activa?"
+            if count == 1
+            else f"¿Cerrar IA Workspace con {count} sesiones activas?"
+        ),
         body=(
-            "Las sesiones se finalizarán de forma ordenada antes de salir. Los cambios ya "
+            "Las terminales y sesiones se finalizarán de forma ordenada antes de salir, junto con "
+            "los procesos que hayan iniciado. Los cambios ya "
             "escritos en los proyectos se conservan. Si quieres que sigan trabajando, "
             "minimiza la ventana en lugar de cerrarla.\n\n" + "\n".join(lines)
         ),

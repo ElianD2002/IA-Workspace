@@ -13,6 +13,8 @@ context.py   AppContext: composición de dependencias (sin GTK).
 services/    Lógica de aplicación: registro de proyectos, proyecto activo y estado
              visual, detección de carpetas, detección de herramientas oficiales.
 sessions/    Contratos y gestor de sesiones concurrentes de agentes.
+terminal/    Terminales reales: process.py (sin GTK: shell, entorno, procesos de la sesión
+             vía /proc), backend.py (SessionBackend con VTE) y theme.py (colores).
 persistence/ SQLite: conexión, migraciones versionadas y repositorios (único SQL).
 domain/      Entidades inmutables: Project, AgentKind, WorkspaceState.
 ```
@@ -53,6 +55,56 @@ SessionManager                start/stop/send_input/remove/shutdown, sessions(pr
 
 Para incorporar un agente real basta con implementar `SessionBackend` y registrarlo en
 `AppContext.create()`. La interfaz no cambia.
+
+## Terminales (fase 2A)
+
+```
+SessionManager (aplicación) ──► VteTerminalHandle ──► Vte.Terminal + proceso (PTY, setsid)
+        ▲                               │ widget()
+        │ eventos started|state|removed ▼
+WorkspaceView (una por proyecto) ── _output_stack: aloja el widget, nunca lo posee
+```
+
+- **Propiedad.** `VteTerminalBackend` (`AgentKind.SHELL`) implementa `SessionBackend`.
+  El handle crea y posee el `Vte.Terminal`. La vista solo lo aloja en su pila de salida
+  mediante el contrato `ViewableHandle.widget()`.
+- **Continuidad.** VTE sigue leyendo el PTY con el widget oculto o la ventana minimizada,
+  así que los procesos no se bloquean. Cambiar de pestaña, de proyecto o de sección solo
+  cambia qué hijo de la pila se muestra; nada se destruye ni se relanza. `SessionManager`
+  conserva el handle de una sesión terminada (para ver su salida final) hasta `remove()`,
+  que llama a `dispose()`.
+- **Directorio y entorno.** `SessionSpec.cwd` es la raíz del proyecto (se comprueba que
+  exista). El entorno es el del usuario más `IAW_PROJECT_ID`, sin las variables `IAW_*`
+  internas. El shell es `$SHELL` o el de `/etc/passwd` (`IAW_TERMINAL_SHELL` solo para
+  pruebas).
+- **Procesos gestionados.** VTE lanza cada terminal en una sesión POSIX nueva, en la que
+  el PID del shell es el id de sesión. `terminal/process.py` localiza los procesos de esa
+  sesión y sus descendientes leyendo `/proc`, de modo que nunca señaliza procesos ajenos,
+  ni el propio IA Workspace, ni el PID 1.
+- **Detener.** SIGHUP a toda la sesión (como cerrar un emulador de terminal) y SIGKILL si
+  algo sigue vivo tras 5 s. Si el shell termina y quedan procesos suyos (`nohup`, `disown`,
+  trabajos que ignoran señales), reciben SIGTERM y, 1 s después, SIGKILL. Solo entonces se
+  informa `STOPPED`/`DONE`. Tras informar el final, nunca se vuelve a señalizar ese PID,
+  porque el sistema podría haberlo reutilizado.
+- **Salida de la aplicación.** Sigue el flujo de la fase 1 (confirmación y
+  `SessionManager.shutdown`: cierre ordenado y, tras 10 s, forzado). Como red de seguridad,
+  `do_shutdown` envía SIGKILL a cualquier proceso gestionado que quedara.
+- **Acciones.** «+» o Ctrl+Mayús+T abre una terminal nueva. Las pestañas seleccionan la
+  sesión. «Detener» pide confirmación. «Cerrar» la pide solo si hay procesos en curso
+  además del shell; cerrar una sesión terminada no pregunta.
+
+### Limitaciones conocidas
+
+- Un proceso que llame a `setsid()` por su cuenta (un demonio) abandona la sesión. Se
+  sigue localizando por ascendencia mientras su proceso padre exista.
+- Si IA Workspace termina de forma abrupta (SIGKILL o caída), no hay cierre ordenado. El
+  kernel cierra el PTY y los shells reciben SIGHUP, pero los procesos que lo ignoren
+  pueden sobrevivir.
+- Los atajos globales de la aplicación (Ctrl+Q, Ctrl+N, Ctrl+O) tienen prioridad sobre la
+  terminal enfocada.
+- Los colores de la terminal siguen el tema claro/oscuro de Libadwaita. Un tema GTK
+  global en `~/.config/gtk-4.0/gtk.css` puede forzar otros colores en el resto de la
+  interfaz.
 
 ## Persistencia
 

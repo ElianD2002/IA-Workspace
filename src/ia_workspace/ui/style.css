@@ -184,3 +184,8 @@
   font-size: 12.5px;
   padding: 8px 12px;
 }
+
+/* ---- Terminales VTE (colores en terminal/theme.py; espaciado del prototipo) ---- */
+.managed-terminal {
+  padding: 10px 14px;
+}

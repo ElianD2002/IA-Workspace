@@ -13,6 +13,7 @@ from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
 from ia_workspace.domain.models import AgentKind, Project
 from ia_workspace.services.detection import inspect_folder
+from ia_workspace.sessions.backend import ViewableHandle
 from ia_workspace.sessions.manager import SessionError
 from ia_workspace.sessions.models import SessionEvent, SessionInfo, SessionSpec, SessionState
 from ia_workspace.ui import widgets as w
@@ -304,30 +305,39 @@ class WorkspaceView(Page):
         self._prompt.grab_focus()
 
     # ---- sesiones -------------------------------------------------------------------
+    #
+    # Las terminales (y sus procesos) pertenecen al SessionManager de la aplicación.
+    # Esta vista solo aloja sus widgets en ``_output_stack``: ocultar el workspace,
+    # cambiar de proyecto o de pestaña nunca destruye ni reinicia una terminal.
 
     def _build_sessions_pane(self) -> Gtk.Widget:
         pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, height_request=180)
         self._tabs = Gtk.Box(spacing=4, hexpand=True)
         self._new_session = Gtk.Button(icon_name="list-add-symbolic")
         self._new_session.add_css_class("flat")
-        self._new_session.connect("clicked", lambda _b: self._start_session(with_prompt=False))
+        self._new_session.connect("clicked", lambda _b: self.new_terminal())
         tabs_scroll = Gtk.ScrolledWindow(child=self._tabs, vscrollbar_policy=Gtk.PolicyType.NEVER, hexpand=True)
         pane.append(_pane_header(tabs_scroll, self._new_session))
 
         self._session_stack = Gtk.Stack()
+        empty_button = Gtk.Button(label="Nueva terminal", halign=Gtk.Align.CENTER)
+        empty_button.add_css_class("pill")
+        empty_button.connect("clicked", lambda _b: self.new_terminal())
+        self._empty_terminal_button = empty_button
         self._session_stack.add_named(
             _compact_status(
                 "utilities-terminal-symbolic",
                 "Sin sesiones en este proyecto",
-                "Los agentes que inicies aquí trabajarán dentro de la carpeta del proyecto y "
-                "seguirán activos aunque cambies de proyecto o minimices la ventana.",
+                "Las terminales y agentes que inicies aquí trabajarán dentro de la carpeta del "
+                "proyecto y seguirán activos aunque cambies de proyecto o minimices la ventana.",
+                empty_button,
             ),
             "empty",
         )
 
         detail = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         status_bar = Gtk.Box(spacing=10, margin_start=12, margin_end=10, margin_top=8, margin_bottom=8)
-        self._session_pill_holder = Gtk.Box()
+        self._session_pill_holder = Gtk.Box(spacing=6)
         status_bar.append(self._session_pill_holder)
         self._session_title = Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
         self._session_title.add_css_class("heading")
@@ -336,30 +346,57 @@ class WorkspaceView(Page):
         status_bar.append(self._session_meta)
         self._stop_button = Gtk.Button(label="Detener")
         self._stop_button.add_css_class("destructive-action")
-        self._stop_button.connect("clicked", lambda _b: self._stop_selected())
+        self._stop_button.connect("clicked", lambda _b: self._confirm_stop_selected())
         status_bar.append(self._stop_button)
-        self._discard_button = Gtk.Button(label="Descartar")
-        self._discard_button.connect("clicked", lambda _b: self._discard_selected())
+        self._discard_button = Gtk.Button(label="Cerrar")
+        self._discard_button.connect("clicked", lambda _b: self._close_selected())
         status_bar.append(self._discard_button)
         detail.append(status_bar)
         detail.append(Gtk.Separator())
+
+        # Salida: el registro de texto (sesiones simuladas) o la terminal de cada sesión.
+        self._output_stack = Gtk.Stack(vexpand=True)
         self._log_view = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
                                       wrap_mode=Gtk.WrapMode.WORD_CHAR)
         self._log_view.add_css_class("terminal-log")
         self._log_scroll = Gtk.ScrolledWindow(child=self._log_view, vexpand=True)
-        detail.append(self._log_scroll)
+        self._output_stack.add_named(self._log_scroll, "log")
+        detail.append(self._output_stack)
         self._session_stack.add_named(detail, "session")
         pane.append(self._session_stack)
 
-        if self.ctx.simulated_agents:
-            self._new_session.set_tooltip_text("Nueva sesión simulada con el agente elegido")
-        else:
-            self._new_session.set_sensitive(False)
-            self._new_session.set_tooltip_text("Las sesiones de agentes llegarán en la próxima fase")
+        self._terminal_hosts: dict[str, Gtk.Widget] = {}
+        self._pending_close: set[str] = set()
+        self._terminal_seq = 0
+        available = self._terminals_available()
+        self._new_session.set_sensitive(available)
+        empty_button.set_sensitive(available)
+        self._new_session.set_tooltip_text(
+            "Nueva terminal (Ctrl+Mayús+T)" if available else "Terminales no disponibles: falta gir1.2-vte-3.91"
+        )
         return pane
 
     def _sessions(self) -> list[SessionInfo]:
         return self.ctx.sessions.sessions(self.project.id)
+
+    def _terminals_available(self) -> bool:
+        return self.ctx.sessions.backend_for(AgentKind.SHELL) is not None
+
+    def new_terminal(self) -> str | None:
+        """Abre una terminal real en la carpeta del proyecto. Devuelve el id de sesión."""
+        if not self._terminals_available():
+            self.nav.toast("Las terminales no están disponibles en este equipo.")
+            return None
+        self._terminal_seq += 1
+        spec = SessionSpec(project_id=self.project.id, kind=AgentKind.SHELL, cwd=self.project.path,
+                           title=f"Terminal {self._terminal_seq}")
+        try:
+            info = self.ctx.sessions.start(spec)
+        except SessionError as exc:
+            self.nav.toast(str(exc))
+            return None
+        self._select_session(info.id)
+        return info.id
 
     def _start_session(self, *, with_prompt: bool) -> None:
         kind = self._selected_agent()
@@ -380,21 +417,114 @@ class WorkspaceView(Page):
                 self.ctx.sessions.send_input(info.id, prompt)
         self._select_session(info.id)
 
+    # ---- detener y cerrar ------------------------------------------------------------
+
+    def _selected_info(self) -> SessionInfo | None:
+        sid = self.state.selected_session
+        return self.ctx.sessions.get(sid) if sid else None
+
+    def _has_running_work(self, info: SessionInfo) -> bool:
+        handle = self.ctx.sessions.handle(info.id)
+        check = getattr(handle, "has_foreground_work", None)
+        return bool(check()) if callable(check) else info.state.is_active
+
+    def _confirm(self, heading: str, body: str, action: str, on_confirm) -> None:
+        dialog = Adw.AlertDialog(heading=heading, body=body)
+        dialog.add_response("cancel", "Cancelar")
+        dialog.add_response("confirm", action)
+        dialog.set_response_appearance("confirm", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", lambda _d, r: on_confirm() if r == "confirm" else None)
+        dialog.present(self.get_root())
+        self._last_dialog = dialog  # accesible para pruebas
+
+    def _confirm_stop_selected(self) -> None:
+        info = self._selected_info()
+        if info is None or not info.state.is_active:
+            return
+        name = info.spec.title or info.spec.kind.label
+        self._confirm(
+            f"¿Detener «{name}»?",
+            "Se pedirá a todos sus procesos que terminen. La salida seguirá visible hasta que "
+            "cierres la terminal. Las terminales de otros proyectos no se ven afectadas.",
+            "Detener",
+            lambda: self.ctx.sessions.stop(info.id),
+        )
+
+    def _close_selected(self) -> None:
+        info = self._selected_info()
+        if info is None:
+            return
+        if not info.state.is_active:
+            self._remove_session(info.id)
+            return
+        name = info.spec.title or info.spec.kind.label
+        if self._has_running_work(info) or info.spec.kind is not AgentKind.SHELL:
+            self._confirm(
+                f"¿Cerrar «{name}»?",
+                "Hay procesos en ejecución en esta terminal. Se detendrán y la terminal se cerrará.",
+                "Cerrar terminal",
+                lambda: self._stop_and_close(info.id),
+            )
+        else:
+            self._stop_and_close(info.id)
+
+    def _stop_and_close(self, session_id: str) -> None:
+        self._pending_close.add(session_id)
+        self.ctx.sessions.stop(session_id)
+        info = self.ctx.sessions.get(session_id)
+        if info is not None and info.state.is_terminal:
+            self._remove_session(session_id)
+
+    def _remove_session(self, session_id: str) -> None:
+        self._pending_close.discard(session_id)
+        try:
+            self.ctx.sessions.remove(session_id)
+        except SessionError as exc:
+            self.nav.toast(str(exc))
+
+    # Compatibilidad con la fase 1 (sesiones simuladas).
     def _stop_selected(self) -> None:
         if self.state.selected_session:
             self.ctx.sessions.stop(self.state.selected_session)
 
     def _discard_selected(self) -> None:
-        session_id = self.state.selected_session
-        if session_id:
-            self.ctx.sessions.remove(session_id)
-            self._logs.pop(session_id, None)
+        if self.state.selected_session:
+            self._remove_session(self.state.selected_session)
+
+    # ---- render -----------------------------------------------------------------------
 
     def _select_session(self, session_id: str | None) -> None:
         if self.state.selected_session != session_id:
             self.state.selected_session = session_id
             self._changed()
         self._render_sessions()
+        host = self._terminal_hosts.get(session_id) if session_id else None
+        if host is not None and self.get_mapped():
+            terminal = self._terminal_widget(session_id)
+            if terminal is not None:
+                terminal.grab_focus()
+
+    def _terminal_widget(self, session_id: str) -> Gtk.Widget | None:
+        handle = self.ctx.sessions.handle(session_id)
+        return handle.widget() if isinstance(handle, ViewableHandle) else None
+
+    def _ensure_host(self, info: SessionInfo) -> Gtk.Widget | None:
+        """Aloja (una sola vez) el widget propio de la sesión dentro de esta vista."""
+        if info.id in self._terminal_hosts:
+            return self._terminal_hosts[info.id]
+        terminal = self._terminal_widget(info.id)
+        if terminal is None:
+            return None
+        host = Gtk.ScrolledWindow(child=terminal, hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
+        host.add_css_class("terminal-host")
+        self._output_stack.add_named(host, info.id)
+        self._terminal_hosts[info.id] = host
+        return host
+
+    def _state_label(self, info: SessionInfo) -> str:
+        return w.session_label(info.state, info.spec.kind)
 
     def _render_sessions(self) -> None:
         sessions = self._sessions()
@@ -406,11 +536,12 @@ class WorkspaceView(Page):
         self._tab_buttons.clear()
         group: Gtk.ToggleButton | None = None
         for info in sessions:
+            self._ensure_host(info)
             content = Gtk.Box(spacing=6)
             content.append(w.tool_chip(info.spec.kind))
             content.append(Gtk.Label(label=info.spec.title or info.spec.kind.label, max_width_chars=22,
                                      ellipsize=Pango.EllipsizeMode.END))
-            content.append(w.status_dot(w.STATE_STYLE[info.state], info.state.label))
+            content.append(w.status_dot(w.STATE_STYLE[info.state], self._state_label(info)))
             button = Gtk.ToggleButton(child=content, active=info.id == self.state.selected_session)
             button.add_css_class("flat")
             button.add_css_class("session-tab")
@@ -422,24 +553,36 @@ class WorkspaceView(Page):
             self._tab_buttons[info.id] = button
             self._tabs.append(button)
 
-        selected = self.ctx.sessions.get(self.state.selected_session) if self.state.selected_session else None
+        selected = self._selected_info()
         if selected is None:
             self._session_stack.set_visible_child_name("empty")
             return
         self._session_stack.set_visible_child_name("session")
         w.clear_box(self._session_pill_holder)
-        self._session_pill_holder.append(w.session_pill(selected.state))
-        if self.ctx.simulated_agents:
+        self._session_pill_holder.append(
+            w.status_pill(self._state_label(selected), w.STATE_STYLE[selected.state],
+                          spinning=selected.state is SessionState.WORKING)
+        )
+        is_terminal = selected.id in self._terminal_hosts
+        if self.ctx.simulated_agents and not is_terminal:
             sim = Gtk.Label(label="SIMULADA")
             sim.add_css_class("sim-label")
             self._session_pill_holder.append(sim)
         self._session_title.set_label(selected.spec.title or selected.spec.kind.label)
-        started = selected.started_at.astimezone().strftime("%H:%M")
-        self._session_meta.set_label(f"{selected.spec.kind.label} · desde {started}")
+        if is_terminal:
+            pid = getattr(self.ctx.sessions.handle(selected.id), "pid", None)
+            where = w.short_path(selected.spec.cwd)
+            self._session_meta.set_label(f"{where} · PID {pid}" if pid else where)
+            self._output_stack.set_visible_child_name(selected.id)
+        else:
+            started = selected.started_at.astimezone().strftime("%H:%M")
+            self._session_meta.set_label(f"{selected.spec.kind.label} · desde {started}")
+            self._log_view.set_buffer(self._buffer_for(selected.id))
+            self._output_stack.set_visible_child_name("log")
         self._stop_button.set_visible(selected.state.is_active)
         self._stop_button.set_sensitive(selected.state is not SessionState.STOPPING)
-        self._discard_button.set_visible(not selected.state.is_active)
-        self._log_view.set_buffer(self._buffer_for(selected.id))
+        self._discard_button.set_label("Cerrar" if is_terminal else "Descartar")
+        self._discard_button.set_visible(is_terminal or not selected.state.is_active)
 
     def _on_tab_toggled(self, button: Gtk.ToggleButton, session_id: str) -> None:
         if button.get_active() and session_id != self.state.selected_session:
@@ -461,10 +604,18 @@ class WorkspaceView(Page):
             return
         if event.kind == "removed":
             self._logs.pop(session_id, None)
+            self._pending_close.discard(session_id)
+            host = self._terminal_hosts.pop(session_id, None)
+            if host is not None:
+                self._output_stack.remove(host)
         elif event.kind == "state" and event.session.state.is_terminal:
-            buffer = self._buffer_for(session_id)
-            detail = f" — {event.session.detail}" if event.session.detail else ""
-            buffer.insert(buffer.get_end_iter(), f"[{event.session.state.label}{detail}]\n")
+            if session_id in self._pending_close:
+                self._remove_session(session_id)
+                return  # remove() emite «removed», que vuelve a dibujar
+            if session_id not in self._terminal_hosts:
+                buffer = self._buffer_for(session_id)
+                detail = f" — {event.session.detail}" if event.session.detail else ""
+                buffer.insert(buffer.get_end_iter(), f"[{event.session.state.label}{detail}]\n")
         self._render_sessions()
 
     def _scroll_log_to_end(self) -> bool:

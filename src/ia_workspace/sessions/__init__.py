@@ -5,7 +5,7 @@ En esta fase no hay integraciones reales: se definen las interfaces y un
 terminal) implementarán en fases posteriores.
 """
 
-from ia_workspace.sessions.backend import SessionBackend, SessionHandle, SessionSink
+from ia_workspace.sessions.backend import SessionBackend, SessionHandle, SessionSink, ViewableHandle
 from ia_workspace.sessions.manager import SessionManager
 from ia_workspace.sessions.models import SessionEvent, SessionInfo, SessionSpec, SessionState
 
@@ -18,4 +18,5 @@ __all__ = [
     "SessionSink",
     "SessionSpec",
     "SessionState",
+    "ViewableHandle",
 ]

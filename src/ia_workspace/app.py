@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import signal
+import sys
 from pathlib import Path
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
@@ -56,6 +57,7 @@ class IAWorkspaceApplication(Adw.Application):
         self.ctx: AppContext | None = None
         self._window = None
         self._quitting = False
+        self.terminal_backend = None
 
     # ---- ciclo de vida ---------------------------------------------------------
 
@@ -72,6 +74,7 @@ class IAWorkspaceApplication(Adw.Application):
         from ia_workspace.ui.dialogs.preferences import apply_color_scheme
 
         apply_color_scheme(self.ctx)
+        self._register_terminals()
         self._load_css()
         self._setup_actions()
         for signum in (signal.SIGINT, signal.SIGTERM):
@@ -86,12 +89,25 @@ class IAWorkspaceApplication(Adw.Application):
         self._window.present()
 
     def do_shutdown(self) -> None:
+        if self.terminal_backend is not None:
+            # Red de seguridad: ningún proceso gestionado sobrevive a la aplicación.
+            self.terminal_backend.kill_all()
         if self._window is not None:
             self._window.save_state()
         if self.ctx is not None:
             self.ctx.close()
             self.ctx = None
         Adw.Application.do_shutdown(self)
+
+    def _register_terminals(self) -> None:
+        try:
+            from ia_workspace.terminal.backend import VteTerminalBackend
+        except (ImportError, ValueError) as exc:  # falta gir1.2-vte-3.91
+            print(f"IA Workspace: terminales no disponibles ({exc})", file=sys.stderr)
+            return
+        assert self.ctx is not None
+        self.terminal_backend = VteTerminalBackend()
+        self.ctx.sessions.register_backend(self.terminal_backend)
 
     def _load_css(self) -> None:
         provider = Gtk.CssProvider()

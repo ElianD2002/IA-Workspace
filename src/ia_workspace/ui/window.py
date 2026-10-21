@@ -135,6 +135,7 @@ class MainWindow(Adw.ApplicationWindow):
             ("add-project", lambda *_: self.request_add_project(), ["<Control>o"]),
             ("toggle-sidebar", lambda *_: self._toggle_sidebar(), ["F9"]),
             ("new-prompt", lambda *_: self._new_prompt(), ["<Control>n"]),
+            ("new-terminal", lambda *_: self._new_terminal(), ["<Control><Shift>t"]),
         ):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", handler)
@@ -147,6 +148,13 @@ class MainWindow(Adw.ApplicationWindow):
     def _hide_overlay_sidebar(self) -> None:
         if self._split.get_collapsed():
             self._split.set_show_sidebar(False)
+
+    def _new_terminal(self) -> None:
+        project_id = self.ctx.workspace.active_project_id
+        if project_id is None or project_id not in self._workspaces:
+            self.toast("Abre un proyecto para crear una terminal en su carpeta.")
+            return
+        self._workspaces[project_id].new_terminal()
 
     def _new_prompt(self) -> None:
         target = self.ctx.workspace.active_project_id or self.ctx.workspace.last_project_id

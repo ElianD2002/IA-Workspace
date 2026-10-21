@@ -58,8 +58,14 @@ def status_pill(text: str, style: str, spinning: bool = False) -> Gtk.Box:
     return box
 
 
-def session_pill(state: SessionState) -> Gtk.Box:
-    return status_pill(state.label, STATE_STYLE[state], spinning=state is SessionState.WORKING)
+def session_label(state: SessionState, kind: AgentKind | None = None) -> str:
+    if kind is AgentKind.SHELL and state is SessionState.IDLE:
+        return "En ejecución"
+    return state.label
+
+
+def session_pill(state: SessionState, kind: AgentKind | None = None) -> Gtk.Box:
+    return status_pill(session_label(state, kind), STATE_STYLE[state], spinning=state is SessionState.WORKING)
 
 
 def status_dot(style: str, tooltip: str | None = None) -> Gtk.Box:

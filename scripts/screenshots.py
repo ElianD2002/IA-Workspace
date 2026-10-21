@@ -84,6 +84,9 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     os.environ["IAW_DATA_DIR"] = str(data)
     os.environ["IAW_SIMULATED_AGENTS"] = "1"
+    # Shell determinista y sin historial para las capturas.
+    os.environ["IAW_TERMINAL_SHELL"] = "/bin/bash --noprofile --norc"
+    os.environ["HISTFILE"] = ""
 
     from ia_workspace.app import IAWorkspaceApplication
     from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind
@@ -120,6 +123,11 @@ def main() -> None:
                 capture(win, f"{scheme}-{('home', 'projects', 'agents', 'memory').index(screen) + 1:02d}-{screen}")
             win.open_project(ids[0])
             capture(win, f"{scheme}-05-workspace")
+            terminal = view.new_terminal()
+            if terminal:
+                pump(1.0)
+                ctx.sessions.send_input(terminal, "PS1='\\W $ '; clear; pwd; ls -la; for i in 1 2 3; do echo paso $i; done\n")
+                capture(win, f"{scheme}-05b-terminal")
             win._workspaces[ids[0]]._ctx_toggle.set_active_name("memory")
             win.open_project(ids[2])
             capture(win, f"{scheme}-06-workspace-vacio")

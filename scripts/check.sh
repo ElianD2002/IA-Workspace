@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validaciones de la fase: entorno, compilación, pruebas y arranque de la UI.
+# Validaciones: entorno, compilación, pruebas de lógica, interfaz y terminales VTE reales.
 # No instala nada ni escribe fuera del repositorio.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,6 +19,12 @@ print(f"Python {sys.version.split()[0]} · PyGObject {gi.__version__} · "
       f"GTK {Gtk.get_major_version()}.{Gtk.get_minor_version()}.{Gtk.get_micro_version()} · "
       f"Libadwaita {Adw.get_major_version()}.{Adw.get_minor_version()}.{Adw.get_micro_version()} · "
       f"SQLite {sqlite3.sqlite_version}")
+try:
+    gi.require_version("Vte", "3.91")
+    from gi.repository import Vte
+    print(f"VTE (GTK 4) {Vte.get_major_version()}.{Vte.get_minor_version()}.{Vte.get_micro_version()}")
+except (ValueError, ImportError):
+    print("VTE para GTK 4 no disponible: instala gir1.2-vte-3.91 para usar terminales")
 EOF
 
 echo "== Compilación"
@@ -30,19 +36,28 @@ if python3 -m ruff --version >/dev/null 2>&1; then
 fi
 
 echo "== Pruebas de lógica"
-(cd tests && python3 -m unittest test_persistence test_services test_sessions)
+(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process)
 
-echo "== Prueba de interfaz (Broadway aislado)"
 source "$ROOT/scripts/_broadway.sh"
 if start_broadway; then
   export GDK_BACKEND=broadway
 fi
-LOG="$ROOT/var/ui-test.log"
 mkdir -p "$ROOT/var"
-(cd tests && python3 -m unittest -v test_ui) 2>&1 | tee "$LOG" | tail -3
-if grep -E "(CRITICAL|Gtk-WARNING|Adwaita-WARNING|Traceback)" "$LOG"; then
-  echo "La prueba de interfaz emitió avisos de GTK" >&2
-  exit 1
-fi
-grep -q "^OK" "$LOG"
+
+run_ui_test() {  # $1 = módulo, $2 = título
+  echo "== $2 (Broadway aislado)"
+  local log="$ROOT/var/$1.log"
+  (cd tests && python3 -m unittest -v "$1") 2>&1 | tee "$log" | tail -3
+  if grep -E "(CRITICAL|Gtk-WARNING|Adwaita-WARNING|Vte-WARNING|Traceback)" "$log"; then
+    echo "La prueba $1 emitió avisos de GTK" >&2
+    exit 1
+  fi
+  grep -q "^OK" "$log"
+  if grep -q "skipped" "$log"; then
+    echo "AVISO: $1 se omitió (¿falta display o gir1.2-vte-3.91?)" >&2
+  fi
+}
+
+run_ui_test test_ui "Prueba de interfaz"
+run_ui_test test_terminals "Terminales VTE reales"
 echo "Todo correcto."

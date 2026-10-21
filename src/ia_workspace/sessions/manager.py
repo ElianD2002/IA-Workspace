@@ -16,7 +16,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from ia_workspace.domain.models import AgentKind
-from ia_workspace.sessions.backend import SessionBackend, SessionHandle
+from ia_workspace.sessions.backend import SessionBackend, SessionHandle, ViewableHandle
 from ia_workspace.sessions.models import SessionEvent, SessionInfo, SessionSpec, SessionState
 
 Callback = Callable[[], None]
@@ -87,6 +87,10 @@ class SessionManager:
     def get(self, session_id: str) -> SessionInfo | None:
         return self._sessions.get(session_id)
 
+    def handle(self, session_id: str) -> SessionHandle | None:
+        """Handle de la sesión, incluso ya terminada (para mostrar su salida final)."""
+        return self._handles.get(session_id)
+
     def sessions(self, project_id: int | None = None) -> list[SessionInfo]:
         return [s for s in self._sessions.values() if project_id is None or s.project_id == project_id]
 
@@ -119,8 +123,9 @@ class SessionManager:
         return info
 
     def send_input(self, session_id: str, text: str) -> None:
+        info = self._sessions.get(session_id)
         handle = self._handles.get(session_id)
-        if handle is None:
+        if info is None or handle is None or not info.state.is_active:
             raise SessionError("La sesión no está activa.")
         handle.send_input(text)
 
@@ -142,7 +147,10 @@ class SessionManager:
         if info.state.is_active:
             raise SessionError("Detén la sesión antes de descartarla.")
         del self._sessions[session_id]
+        handle = self._handles.pop(session_id, None)
         self._emit("removed", info)
+        if isinstance(handle, ViewableHandle):
+            handle.dispose()
 
     def shutdown(self, on_done: Callback, grace_seconds: float = 10.0) -> None:
         """Finalización controlada de todas las sesiones activas.
@@ -194,9 +202,9 @@ class SessionManager:
         info.state = state
         info.detail = detail
         if state.is_terminal:
+            # El handle se conserva hasta remove(): su salida final sigue visible.
             info.ended_at = datetime.now(UTC)
             info.exit_code = exit_code
-            self._handles.pop(session_id, None)
         self._emit("state", info)
         if state.is_terminal:
             self._maybe_finish_shutdown()

@@ -155,7 +155,7 @@ class HomePage(Page):
                 title=f"{s.spec.kind.label}: {s.state.label.lower()}",
                 subtitle=f"{names.get(s.project_id, '—')} · {s.detail or s.spec.title or 'Sesión'}",
             )
-            row.add_prefix(w.session_pill(s.state))
+            row.add_prefix(w.session_pill(s.state, s.spec.kind))
             button = Gtk.Button(label="Abrir", valign=Gtk.Align.CENTER)
             button.connect("clicked", lambda _b, pid=s.project_id: self.nav.open_project(pid))
             row.add_suffix(button)
@@ -178,7 +178,7 @@ class HomePage(Page):
         for s in active:
             row = Adw.ActionRow(title=s.spec.title or s.spec.kind.label, subtitle=names.get(s.project_id, "—"))
             row.add_prefix(w.tool_chip(s.spec.kind))
-            row.add_suffix(w.session_pill(s.state))
+            row.add_suffix(w.session_pill(s.state, s.spec.kind))
             row.set_activatable(True)
             row.connect("activated", lambda _r, pid=s.project_id: self.nav.open_project(pid))
             running.append(row)

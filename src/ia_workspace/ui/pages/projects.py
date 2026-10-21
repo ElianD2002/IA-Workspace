@@ -217,6 +217,8 @@ class ProjectsPage(Page):
 
         def on_response(_d: Adw.AlertDialog, response: str) -> None:
             if response == "remove":
+                for finished in self.ctx.sessions.sessions(project.id):
+                    self.ctx.sessions.remove(finished.id)  # todas terminadas (ver arriba)
                 self.ctx.projects.unregister(project.id)
                 self.nav.toast(f"«{project.name}» se quitó del registro")
 
