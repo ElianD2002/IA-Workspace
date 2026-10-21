@@ -199,9 +199,11 @@ class WorkspaceFixesTest(unittest.TestCase):
               f"subtítulo: {rows[0].get_subtitle() if rows else None}")
         check(rows[0].get_title() == "Conversación compartida de ChatGPT", rows[0].get_title() if rows else "")
 
-        # Abrir en el navegador (registrado, no abierto) y copiar el enlace.
+        # «Abrir en el navegador» (registrado, no abierto) y copiar el enlace. Pulsar la fila
+        # abre la conversación dentro de IA Workspace (ver test_chatgpt_web_ui, con un sitio
+        # simulado); aquí se usa la opción del menú para no cargar ninguna web real.
         private_row = next(r for r in rows if r.get_subtitle().startswith("Privada"))
-        private_row.activate()
+        view_a._open_link_external(private_row.link_id)
         pump(timeout=0.1)
         view_a._copy_link(private_row.link_id)
         clip: dict = {}

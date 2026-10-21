@@ -9,6 +9,8 @@ el ``SessionManager`` de la aplicación y la vista solo las observa.
 
 from __future__ import annotations
 
+import os
+
 from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
 from ia_workspace.agents.auth import AuthState
@@ -16,10 +18,12 @@ from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind, Project, Pr
 from ia_workspace.services.chat_links import kind_of
 from ia_workspace.services.chatgpt_links import parse_chat_link
 from ia_workspace.services.detection import inspect_folder
+from ia_workspace.services.web_policy import resolve_for_view, test_base_url
 from ia_workspace.sessions.backend import ViewableHandle
 from ia_workspace.sessions.manager import SessionError
 from ia_workspace.sessions.models import SessionEvent, SessionInfo, SessionSpec, SessionState
 from ia_workspace.ui import widgets as w
+from ia_workspace.ui.chatgpt_browser import WEBKIT_AVAILABLE
 from ia_workspace.ui.pages.base import Navigator, Page
 
 CHATGPT_URL = "https://chatgpt.com/"
@@ -73,6 +77,13 @@ class WorkspaceView(Page):
         folder = Gtk.Button(icon_name="folder-open-symbolic", tooltip_text="Abrir carpeta del proyecto")
         folder.connect("clicked", lambda _b: self._open_folder())
         self.header.pack_start(folder)
+        # Con la ventana estrecha el panel ChatGPT se oculta: este botón abre su vista ampliada.
+        self._chat_header_button = Gtk.Button(icon_name="user-available-symbolic", visible=False,
+                                              tooltip_text="ChatGPT (vista ampliada)")
+        self._chat_header_button.connect("clicked", lambda _b: self.open_chat_expanded())
+        self.header.pack_start(self._chat_header_button)
+        self._browser = None  # vista web de este proyecto (se crea al abrir una conversación)
+        self._expanded = None  # diálogo de vista ampliada, si está abierto
         # Simétrico al botón de la barra lateral izquierda: extremo derecho de la cabecera.
         self._context_toggle = Gtk.ToggleButton(
             icon_name="sidebar-show-right-symbolic",
@@ -200,6 +211,10 @@ class WorkspaceView(Page):
             self._context_toggle.set_tooltip_text(
                 "Necesita una ventana más ancha" if narrow else "Panel de tareas y memoria (Mayús+F9)"
             )
+        if hasattr(self, "_chat_header_button"):
+            self._chat_header_button.set_visible(
+                WEBKIT_AVAILABLE and self.state.show_chat and "show_chat" in self._narrow
+            )
 
     def _reset_layout(self) -> None:
         for key, _label, _icon in PANELS:
@@ -258,6 +273,7 @@ class WorkspaceView(Page):
         self._chat_stack.add_named(
             Gtk.ScrolledWindow(child=listing, hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True), "list"
         )
+        self._chat_stack.add_named(self._build_web_page(), "web")
         pane.append(self._chat_stack)
 
         note = w.caption("IA Workspace no lee tu historial de ChatGPT. Solo muestra las conversaciones que vinculas.")
@@ -287,10 +303,14 @@ class WorkspaceView(Page):
 
     def _render_links(self) -> None:
         links = self.ctx.chat_links.list(self.project.id)
+        browser = self._browser
+        if browser is not None and browser.link_id is not None and all(l.id != browser.link_id for l in links):
+            self._close_conversation()  # se desvinculó la conversación abierta
         w.clear_box(self._chat_list)
         for link in links:
             self._chat_list.append(self._link_row(link))
-        self._chat_stack.set_visible_child_name("list" if links else "empty")
+        if self._chat_stack.get_visible_child_name() != "web":
+            self._chat_stack.set_visible_child_name("list" if links else "empty")
 
     def _link_row(self, link) -> Gtk.Widget:
         kind = kind_of(link)
@@ -300,6 +320,8 @@ class WorkspaceView(Page):
                             use_markup=False, activatable=True, tooltip_text=f"Abrir en el navegador: {link.url}")
         row.link_id = link.id  # type: ignore[attr-defined]
         row.connect("activated", lambda _r: self._open_link(link.id))  # clic, Intro o activación
+        if self._browser is not None and self._browser.link_id == link.id:
+            row.add_suffix(w.status_pill("Abierta", "idle"))
         icon = Gtk.Image.new_from_icon_name("folder-publicshare-symbolic" if kind.value == "shared"
                                             else "user-available-symbolic")
         icon.add_css_class("dim-label")
@@ -308,7 +330,7 @@ class WorkspaceView(Page):
 
         group = Gio.SimpleActionGroup()
         for name, handler in (
-            ("open", lambda *_: self._open_link(link.id)),
+            ("open", lambda *_: self._open_link_external(link.id)),
             ("copy", lambda *_: self._copy_link(link.id)),
             ("rename", lambda *_: self._rename_link(link.id)),
             ("unlink", lambda *_: self._unlink(link.id)),
@@ -341,11 +363,183 @@ class WorkspaceView(Page):
         dialog.present(self.get_root())
         self._last_dialog = dialog
 
-    def _open_link(self, link_id: int) -> None:
+    def _open_link_external(self, link_id: int) -> None:
         link = self.ctx.chat_links.get(link_id)
         if link is not None and link.project_id == self.project.id:
             # Validado al guardarlo y otra vez aquí: solo se abren enlaces de chatgpt.com.
             self._open_uri(parse_chat_link(link.url).url)
+
+    def _open_link(self, link_id: int) -> None:
+        """Abre la conversación dentro de IA Workspace (o en el navegador, sin WebKitGTK)."""
+        if WEBKIT_AVAILABLE:
+            self.open_conversation(link_id)
+        else:
+            self._open_link_external(link_id)
+
+    # ---- ChatGPT dentro de IA Workspace (WebKitGTK) ----------------------------------
+    #
+    # Cada proyecto tiene su propia vista web, que solo abre conversaciones vinculadas a
+    # ese proyecto. La sesión de ChatGPT (cookies del sitio oficial) es compartida y vive
+    # en el almacenamiento persistente de WebKitGTK; IA Workspace nunca la lee ni la copia.
+
+    def _build_web_page(self) -> Gtk.Widget:
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        back = Gtk.Button(icon_name="go-previous-symbolic", tooltip_text="Volver a la lista")
+        back.add_css_class("flat")
+        back.connect("clicked", lambda _b: self._show_chat_list())
+        self._web_title = Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
+        self._web_title.add_css_class("pane-title")
+        self._web_spinner = Adw.Spinner(visible=False)
+        reload = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Recargar")
+        reload.add_css_class("flat")
+        reload.connect("clicked", lambda _b: self._web_reload())
+        external = Gtk.Button(icon_name="send-to-symbolic", tooltip_text="Abrir en el navegador")
+        external.add_css_class("flat")
+        external.connect("clicked", lambda _b: self._web_external())
+        expand = Gtk.Button(icon_name="view-fullscreen-symbolic", tooltip_text="Vista ampliada")
+        expand.add_css_class("flat")
+        expand.connect("clicked", lambda _b: self.open_chat_expanded())
+        page.append(_pane_header(back, self._web_title, self._web_spinner, reload, external, expand))
+
+        self._web_banner = Adw.Banner(revealed=False)
+        self._web_banner.connect("button-clicked", lambda _b: self._web_reload())
+        page.append(self._web_banner)
+        self._web_stack = Gtk.Stack(vexpand=True)
+        self._web_host = Adw.Bin(vexpand=True, hexpand=True)
+        self._web_stack.add_named(self._web_host, "view")
+        self._web_stack.add_named(
+            _compact_status("view-fullscreen-symbolic", "Abierta en la vista ampliada",
+                            "Cierra la vista ampliada para seguir aquí."),
+            "expanded",
+        )
+        page.append(self._web_stack)
+        return page
+
+    def _web_data_dir(self):
+        paths = self.ctx.paths
+        return paths.data_dir / "webkit" if paths is not None else None
+
+    def _ensure_browser(self):
+        if self._browser is None:
+            from ia_workspace.ui.chatgpt_browser import ChatBrowser, network_session
+
+            self._browser = ChatBrowser(
+                network_session(self._web_data_dir()),
+                on_changed=self._update_web_ui,
+                on_external=self._open_uri,
+            )
+            self._place_browser(self._web_host)
+        return self._browser
+
+    def _place_browser(self, host: Adw.Bin) -> None:
+        """Mueve la vista web (sin recrearla ni recargarla) al contenedor indicado."""
+        view = self._browser.view
+        parent = view.get_parent()
+        if parent is host:
+            return
+        if isinstance(parent, Adw.Bin):
+            parent.set_child(None)
+        host.set_child(view)
+
+    def open_conversation(self, link_id: int) -> bool:
+        """Abre una conversación vinculada a este proyecto en la vista web integrada."""
+        link = self.ctx.chat_links.get(link_id)
+        if link is None or link.project_id != self.project.id:
+            return False  # nunca se abre una conversación de otro proyecto
+        url = resolve_for_view(parse_chat_link(link.url).url, test_base_url(dict(os.environ)))
+        self._ensure_browser().open(link.id, url)
+        self._web_title.set_label(link.title)
+        self._web_title.set_tooltip_text(link.title)
+        if self._expanded is None:
+            self._chat_stack.set_visible_child_name("web")
+        else:
+            self._expanded.select_link(link.id)
+            self._expanded.set_title(f"ChatGPT · {link.title}")
+        self._render_links()
+        return True
+
+    def _close_conversation(self) -> None:
+        if self._browser is not None:
+            self._browser.link_id = self._browser.url = None
+            self._browser.view.load_uri("about:blank")
+        if self._expanded is not None:
+            self._expanded.force_close()
+        self._show_chat_list()
+
+    def _show_chat_list(self) -> None:
+        has_links = bool(self.ctx.chat_links.list(self.project.id))
+        self._chat_stack.set_visible_child_name("list" if has_links else "empty")
+
+    def _current_link(self):
+        if self._browser is None or self._browser.link_id is None:
+            return None
+        return self.ctx.chat_links.get(self._browser.link_id)
+
+    def _web_reload(self) -> None:
+        if self._browser is not None:
+            self._browser.reload()
+
+    def _web_external(self) -> None:
+        link = self._current_link()
+        if link is not None:
+            self._open_link_external(link.id)
+
+    def _update_web_ui(self) -> None:
+        browser = self._browser
+        if browser is None:
+            return
+        message = browser.error or browser.notice
+        banners = [self._web_banner] + ([self._expanded.banner] if self._expanded is not None else [])
+        for banner in banners:
+            banner.set_title(message or "")
+            banner.set_button_label("Reintentar" if browser.error else None)
+            banner.set_revealed(bool(message))
+        self._web_spinner.set_visible(browser.loading)
+        if self._expanded is not None:
+            self._expanded.spinner.set_visible(browser.loading)
+
+    def open_chat_expanded(self) -> None:
+        """Vista ampliada: la misma vista web en un diálogo grande (útil con ventanas pequeñas)."""
+        if not WEBKIT_AVAILABLE or self._expanded is not None:
+            return
+        from ia_workspace.ui.dialogs.chatgpt_expanded import ChatExpandedDialog
+
+        links = self.ctx.chat_links.list(self.project.id)
+        current = self._current_link()
+        dialog = ChatExpandedDialog(
+            project_name=self.project.name,
+            links=links,
+            current_link_id=current.id if current is not None else None,
+            on_select=self.open_conversation,
+            on_reload=self._web_reload,
+            on_external=self._web_external,
+            on_link_request=self.request_link_conversation,
+        )
+        root = self.get_root()
+        if root is not None:
+            dialog.set_content_width(max(360, int(root.get_width() * 0.94)))
+            dialog.set_content_height(max(360, int(root.get_height() * 0.92)))
+        self._expanded = dialog
+        dialog.connect("closed", self._on_expanded_closed)
+        if links:
+            if current is None:
+                self.open_conversation(links[0].id)
+            self._place_browser(dialog.host)
+            self._web_stack.set_visible_child_name("expanded")
+            if current is not None:
+                dialog.set_title(f"ChatGPT · {current.title}")
+        self._update_web_ui()
+        dialog.present(root)
+        self._last_dialog = dialog
+
+    def _on_expanded_closed(self, _dialog: Adw.Dialog) -> None:
+        self._expanded = None
+        if self._browser is not None:
+            self._place_browser(self._web_host)
+        self._web_stack.set_visible_child_name("view")
+        if self._current_link() is not None and self._chat_pane.get_visible():
+            self._chat_stack.set_visible_child_name("web")
+        self._update_web_ui()
 
     def _copy_link(self, link_id: int) -> None:
         link = self.ctx.chat_links.get(link_id)

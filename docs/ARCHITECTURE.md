@@ -205,6 +205,72 @@ VteTerminalBackend(kind, argv_builder) ─► agents.tools.build_launch_argv / b
   opción no permitida…), el borrador del editor no se vacía y la transferencia queda
   registrada con `status="error"` y el detalle del fallo.
 
+## Icono oficial e integración con GNOME
+
+- **Origen único.** `data/icons/app-icon.png` (1254×1254, RGBA, aprobado) nunca se modifica.
+  `scripts/build_icons.py` genera `data/icons/hicolor/<N>x<N>/apps/<APP_ID>.png` (16 a
+  512 px) reduciéndolo directamente con interpolación de alta calidad, sin recortes ni
+  retoques; `--check` (en `scripts/check.sh`) falla si algún tamaño está desactualizado.
+- **Una sola identidad.** El nombre del icono, el archivo `.desktop`, `StartupWMClass` y el
+  id de `Adw.Application` son el mismo: `io.github.elianmartinez.IAWorkspace`. En GNOME
+  Wayland, GTK publica ese id como `app_id` de la ventana y la Shell la asocia a su `.desktop`
+  (icono en el dock y Alt+Tab). En X11, `main()` fija el `prgname` al mismo valor para que
+  `WM_CLASS` coincida.
+- **Desde el código fuente.** `IAWorkspaceApplication._setup_icon()` añade `data/icons` a la
+  búsqueda del tema de iconos y fija `Gtk.Window.set_default_icon_name(APP_ID)`; el diálogo
+  «Acerca de» usa el mismo nombre.
+- **Lanzador local reversible.** `scripts/desktop-launcher.sh install|uninstall|status`
+  copia el `.desktop` (con `Exec`/`TryExec` apuntando a `scripts/run.sh` de esta copia) y
+  los iconos a `$XDG_DATA_HOME`; nunca usa rutas del sistema, solo actualiza la caché de
+  iconos si ya existía y `uninstall` borra exactamente los archivos con el nombre del id.
+- **Limitación.** A 16 y 24 px el diseño (muy detallado) pierde el detalle interior; no se
+  redibuja para conservar el original aprobado.
+
+## ChatGPT integrado (WebKitGTK 6.0)
+
+```
+fila de conversación ─► WorkspaceView.open_conversation(link_id)   (solo enlaces del proyecto)
+                           │
+                           ▼
+              ChatBrowser (uno por proyecto) ─► WebKit.WebView
+                           │                          │
+                           │                network_session(data_dir/webkit)  (compartida,
+                           │                persistente: cookies.sqlite de WebKitGTK)
+                           ▼
+              panel ChatGPT  ⇄  ChatExpandedDialog (vista ampliada; misma WebView, trasladada)
+```
+
+- **Sitio oficial, sin trucos.** Se carga `https://chatgpt.com/...` con el User-Agent estándar
+  de WebKitGTK; el usuario inicia sesión con el flujo oficial. IA Workspace no inyecta ni
+  evalúa JavaScript, no lee cookies ni el contenido de las páginas y no copia nada a SQLite;
+  `tests/test_web_policy.py` comprueba que el código no usa esas APIs.
+- **Almacenamiento.** `NetworkSession` persistente en `<datos>/webkit/{data,cache}` (con el
+  código fuente, `var/webkit/`), compartida por todos los proyectos: la autenticación es
+  común, pero cada proyecto tiene su propia `WebView` y solo abre sus conversaciones.
+  «Borrar datos web» usa `WebsiteDataManager.clear` (sin leer los datos).
+- **Política** (`services/web_policy.py`): solo HTTPS (y `about:`/`data:`/`blob:` para el
+  contenido propio de la página); `file:`, `javascript:`, `http:` y otros esquemas se
+  bloquean; `mailto:`/`tel:` y las ventanas nuevas se abren en el sistema. Se deniegan todos
+  los permisos (micrófono, notificaciones…), se bloquean las descargas y los errores TLS no
+  se aceptan nunca. Sin herramientas de desarrollo ni ventanas emergentes automáticas.
+- **Ciclo de vida.** Al salir se terminan los procesos web y se sueltan las sesiones; una
+  prueba en subproceso verifica que ningún proceso de WebKit sobrevive a la aplicación.
+- **Pruebas.** `IAW_CHATGPT_BASE_URL` (solo `http` en loopback; se ignora cualquier otra cosa)
+  sirve las conversaciones desde un servidor simulado; `scripts/check.sh` la fija por
+  defecto a un puerto cerrado para que ninguna prueba cargue el sitio real.
+
+### Limitaciones conocidas
+
+- El inicio de sesión real solo puede confirmarlo el usuario. Los flujos por redirección
+  (correo, Google, Microsoft, Apple desde «Iniciar sesión») deberían funcionar; un flujo que
+  dependa de una ventana emergente (p. ej. el aviso «Continuar con Google» flotante) puede
+  no completarse, porque las ventanas nuevas se abren en el navegador externo, que no
+  comparte la sesión. En ese caso hay que usar «Iniciar sesión» en la propia página.
+- Voz, cámara, notificaciones y descargas no funcionan en la vista integrada (permisos
+  denegados por diseño): para eso, «Abrir en el navegador».
+- Proveedores de identidad pueden rechazar navegadores integrados en el futuro; el
+  navegador externo sigue disponible en todas las conversaciones.
+
 ## Corrección unificada tras las primeras pruebas reales
 
 - **Panel derecho plegable.** Hay un botón en el extremo derecho de la cabecera del

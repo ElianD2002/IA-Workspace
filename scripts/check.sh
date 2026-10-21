@@ -6,6 +6,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 export PYTHONWARNINGS="ignore::DeprecationWarning:gi.events"
 export PYTHONPYCACHEPREFIX="$ROOT/var/pycache"
+# Ninguna prueba debe cargar el sitio real de ChatGPT: por defecto, cualquier vista web de las
+# pruebas apunta a un puerto local cerrado (test_chatgpt_web_ui usa su propio servidor simulado).
+export IAW_CHATGPT_BASE_URL="${IAW_CHATGPT_BASE_URL:-http://127.0.0.1:9}"
 
 echo "== Entorno"
 python3 - <<'EOF'
@@ -35,8 +38,11 @@ if python3 -m ruff --version >/dev/null 2>&1; then
   python3 -m ruff check src tests scripts
 fi
 
+echo "== Iconos generados a partir del original"
+python3 scripts/build_icons.py --check
+
 echo "== Pruebas de lógica"
-(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process test_agents test_fixes test_prompt_transfer)
+(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process test_agents test_fixes test_prompt_transfer test_icon test_web_policy)
 
 source "$ROOT/scripts/_broadway.sh"
 if start_broadway; then
@@ -63,9 +69,11 @@ run_ui_test test_terminals "Terminales VTE reales"
 run_ui_test test_agents_ui "Agentes con CLI falsas"
 run_ui_test test_workspace_ui "Panel derecho y conversaciones"
 run_ui_test test_prompt_transfer_ui "Transferencia de prompts a agentes"
+run_ui_test test_icon_ui "Icono oficial en GTK"
+run_ui_test test_chatgpt_web_ui "ChatGPT integrado (WebKitGTK, sitio simulado)"
 
 # Ningún dato de cuenta (de los dobles de prueba) debe acabar en registros.
-if grep -rIl -E "persona@example\.invalid|FAKE-ORG-SECRET-123" "$ROOT/var"/*.log 2>/dev/null; then
+if grep -rIl -E "persona@example\.invalid|FAKE-ORG-SECRET-123|sim_session_7f3a" "$ROOT/var"/*.log 2>/dev/null; then
   echo "Se filtraron datos de cuenta a los registros" >&2
   exit 1
 fi

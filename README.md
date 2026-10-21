@@ -37,6 +37,23 @@ Desde el código fuente, todos los datos (base SQLite, capturas, temporales de p
 se guardan en `var/` dentro del repositorio. Instalada, la aplicación usa
 `$XDG_DATA_HOME/ia-workspace/`. `IAW_DATA_DIR` permite elegir otra carpeta.
 
+### Lanzador e icono en GNOME
+
+`scripts/run.sh` funciona sin instalar nada, y la ventana ya muestra el icono oficial. Para
+que IA Workspace aparezca en el menú de aplicaciones, el dock y Alt+Tab con su icono,
+instala el lanzador en tu carpeta personal (no usa `sudo` ni toca rutas del sistema):
+
+```bash
+scripts/desktop-launcher.sh install     # ~/.local/share/applications + ~/.local/share/icons/hicolor
+scripts/desktop-launcher.sh status
+scripts/desktop-launcher.sh uninstall   # quita exactamente esos archivos
+```
+
+El lanzador ejecuta `scripts/run.sh` de esta copia del repositorio; si la mueves de
+carpeta, vuelve a instalarlo. Los tamaños del icono (`data/icons/hicolor/`) se generan a
+partir del original aprobado (`data/icons/app-icon.png`, que nunca se modifica) con
+`python3 scripts/build_icons.py`; `scripts/check.sh` comprueba que estén al día.
+
 ## Agentes
 
 | Herramienta | CLI oficial | Estado de sesión | Inicio de sesión |
@@ -71,6 +88,17 @@ conversación (`chatgpt.com/c/…`, `chatgpt.com/g/…/c/…`), de un enlace com
 tu navegador con tu sesión habitual. IA Workspace no lee su contenido ni pide credenciales.
 Cada proyecto tiene su propia lista: renombrar, copiar el enlace y desvincular están en el
 menú **⋮** de cada conversación.
+
+Al pulsar una conversación se abre **dentro de IA Workspace** (WebKitGTK 6.0, paquete
+`gir1.2-webkit-6.0`): inicias sesión una vez en el sitio oficial de ChatGPT y la sesión se
+guarda en el almacenamiento web propio de la aplicación, compartido por todos los proyectos.
+El panel tiene controles para volver a la lista, recargar, abrir en el navegador y una
+**vista ampliada**; con la ventana estrecha, un botón en la cabecera la abre. **Preferencias →
+Integraciones → Borrar datos web…** cierra esa sesión. Sin WebKitGTK, las conversaciones se
+abren en el navegador predeterminado.
+
+Para probar el inicio de sesión de forma aislada, sin tocar los datos de la aplicación:
+`python3 scripts/chatgpt_poc.py` (y `--clear` para borrar sus datos).
 
 ## Atajos
 

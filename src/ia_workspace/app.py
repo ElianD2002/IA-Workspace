@@ -79,6 +79,7 @@ class IAWorkspaceApplication(Adw.Application):
         apply_color_scheme(self.ctx)
         self._register_terminals()
         self._load_css()
+        self._setup_icon()
         self._setup_actions()
         for signum in (signal.SIGINT, signal.SIGTERM):
             GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signum, self._on_unix_signal)
@@ -97,6 +98,10 @@ class IAWorkspaceApplication(Adw.Application):
             backend.kill_all()
         if self._window is not None:
             self._window.save_state()
+            self._window.release_web_views()
+        from ia_workspace.ui.chatgpt_browser import release_sessions
+
+        release_sessions()
         if self.ctx is not None:
             self.ctx.close()
             self.ctx = None
@@ -129,6 +134,19 @@ class IAWorkspaceApplication(Adw.Application):
             ctx.sessions.register_backend(backend)
         self.terminal_backends = backends
 
+    def _setup_icon(self) -> None:
+        """Icono oficial: su nombre es el identificador de la aplicación.
+
+        Instalada (o con el lanzador local), el tema de iconos ya lo encuentra en
+        ``hicolor``. Desde el código fuente se añade ``data/icons`` a la búsqueda, para que
+        la ventana y el diálogo «Acerca de» muestren el icono sin instalar nada.
+        """
+        display = Gdk.Display.get_default()
+        source_icons = Path(__file__).resolve().parents[2] / "data" / "icons"
+        if display is not None and (source_icons / "hicolor").is_dir():
+            Gtk.IconTheme.get_for_display(display).add_search_path(str(source_icons))
+        Gtk.Window.set_default_icon_name(APP_ID)
+
     def _load_css(self) -> None:
         provider = Gtk.CssProvider()
         provider.load_from_path(str(Path(__file__).parent / "ui" / "style.css"))
@@ -156,7 +174,7 @@ class IAWorkspaceApplication(Adw.Application):
     def _show_about(self) -> None:
         dialog = Adw.AboutDialog(
             application_name=APP_NAME,
-            application_icon="applications-engineering-symbolic",
+            application_icon=APP_ID,
             version=VERSION,
             developer_name="Elian Martinez",
             comments="Centro de coordinación de proyectos y agentes de IA para GNOME.",

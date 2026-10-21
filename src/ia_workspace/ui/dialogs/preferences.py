@@ -87,10 +87,7 @@ class PreferencesDialog(Adw.PreferencesDialog):
             row.add_suffix(holder)
             self._tool_rows[status.kind] = (row, holder)
             tools.add(row)
-        chatgpt = Adw.ActionRow(title="ChatGPT", subtitle="Se usa en tu navegador con tu propia sesión")
-        chatgpt.add_prefix(w.tool_chip("gpt", "GPT", "ChatGPT"))
-        chatgpt.add_suffix(w.status_pill("Navegador", "idle"))
-        tools.add(chatgpt)
+        tools.add(self._chatgpt_row())
         page.add(tools)
 
         note = Adw.PreferencesGroup(
@@ -105,6 +102,56 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self.connect("closed", lambda _d: self._unsubscribe())
         self._render_tools()
         return page
+
+    def _chatgpt_row(self) -> Adw.ActionRow:
+        from ia_workspace.ui.chatgpt_browser import WEBKIT_AVAILABLE
+
+        if not WEBKIT_AVAILABLE:
+            row = Adw.ActionRow(title="ChatGPT", subtitle="Se usa en tu navegador con tu propia sesión")
+            row.add_prefix(w.tool_chip("gpt", "GPT", "ChatGPT"))
+            row.add_suffix(w.status_pill("Navegador", "idle"))
+            return row
+        row = Adw.ActionRow(
+            title="ChatGPT",
+            subtitle=(
+                "Integrado en IA Workspace: inicias sesión en el sitio oficial y la sesión se guarda en "
+                "el almacenamiento web propio de la aplicación (también puedes abrir cada conversación "
+                "en tu navegador)."
+            ),
+        )
+        row.add_prefix(w.tool_chip("gpt", "GPT", "ChatGPT"))
+        clear = Gtk.Button(label="Borrar datos web…", valign=Gtk.Align.CENTER)
+        clear.add_css_class("flat")
+        clear.set_tooltip_text("Cierra la sesión de ChatGPT guardada en IA Workspace")
+        clear.connect("clicked", lambda _b: self._confirm_clear_web_data())
+        row.add_suffix(clear)
+        return row
+
+    def _confirm_clear_web_data(self) -> None:
+        dialog = Adw.AlertDialog(
+            heading="¿Borrar los datos web de ChatGPT?",
+            body=(
+                "Se borrarán las cookies, la caché y el resto de datos que el sitio de ChatGPT guardó en "
+                "IA Workspace, así que tendrás que volver a iniciar sesión. Tus conversaciones vinculadas, "
+                "tu cuenta y tu navegador no se modifican."
+            ),
+        )
+        dialog.add_response("cancel", "Cancelar")
+        dialog.add_response("clear", "Borrar datos web")
+        dialog.set_response_appearance("clear", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", lambda _d, r: self._clear_web_data() if r == "clear" else None)
+        dialog.present(self)
+        self._last_dialog = dialog
+
+    def _clear_web_data(self) -> None:
+        from ia_workspace.ui.chatgpt_browser import clear_website_data
+
+        data_dir = self.ctx.paths.data_dir / "webkit" if self.ctx.paths is not None else None
+        clear_website_data(data_dir, lambda ok: self.add_toast(Adw.Toast(
+            title="Datos web de ChatGPT borrados" if ok else "No se pudieron borrar los datos web"
+        )))
 
     def _check_tools(self) -> None:
         self.ctx.agents.detect()

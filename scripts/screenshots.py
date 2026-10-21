@@ -172,6 +172,11 @@ def main() -> None:
             confirm.present(win)
             capture(win, f"{scheme}-08-confirmar-salida")
             confirm.force_close()
+            app.activate_action("about", None)
+            capture(win, f"{scheme}-10-acerca-de")
+            about = win.get_visible_dialog()
+            if about is not None:
+                about.force_close()
             win.set_default_size(820, 700)
             pump(0.3)
             win.open_project(ids[0])

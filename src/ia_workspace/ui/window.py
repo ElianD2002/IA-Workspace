@@ -215,6 +215,12 @@ class MainWindow(Adw.ApplicationWindow):
             width, height = 1366, 768
         self.set_default_size(width, height)
 
+    def release_web_views(self) -> None:
+        """Termina los procesos de WebKit de las vistas de ChatGPT (al salir)."""
+        for view in self._workspaces.values():
+            if view._browser is not None:
+                view._browser.shutdown()
+
     def save_state(self) -> None:
         width, height = self.get_default_size()
         if not self.is_maximized() and width > 0 and height > 0:
