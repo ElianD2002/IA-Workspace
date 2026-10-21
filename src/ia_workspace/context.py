@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ia_workspace.agents.catalog import AgentCatalog
 from ia_workspace.config import AppPaths
 from ia_workspace.domain.models import SELECTABLE_AGENTS
 from ia_workspace.persistence.database import Database
 from ia_workspace.persistence.repositories import (
+    ChatLinkRepository,
     ProjectRepository,
     SettingsRepository,
     WorkspaceStateRepository,
 )
+from ia_workspace.services.chat_links import ChatLinkService
 from ia_workspace.services.projects import ProjectService
 from ia_workspace.services.workspace import WorkspaceController
 from ia_workspace.sessions.manager import Dispatch, Schedule, SessionManager, _direct, _no_timer
@@ -25,6 +28,8 @@ class AppContext:
     projects: ProjectService
     workspace: WorkspaceController
     sessions: SessionManager
+    agents: AgentCatalog
+    chat_links: ChatLinkService
     simulated_agents: bool = False
 
     @classmethod
@@ -50,6 +55,8 @@ class AppContext:
             projects=ProjectService(ProjectRepository(db)),
             workspace=WorkspaceController(WorkspaceStateRepository(db), settings),
             sessions=sessions,
+            agents=AgentCatalog(dispatch=dispatch),
+            chat_links=ChatLinkService(ChatLinkRepository(db)),
             simulated_agents=simulated_agents,
         )
 

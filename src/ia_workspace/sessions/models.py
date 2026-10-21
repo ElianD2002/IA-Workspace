@@ -15,10 +15,11 @@ class SessionState(StrEnum):
     WORKING = "working"
     WAITING_APPROVAL = "waiting_approval"
     STOPPING = "stopping"
-    DONE = "done"
-    ERROR = "error"
+    DONE = "done"  # el proceso terminó con código 0
+    FAILED = "failed"  # el proceso terminó con código distinto de 0 o por una señal ajena
+    ERROR = "error"  # no se pudo iniciar o falló la integración"
     DISCONNECTED = "disconnected"
-    STOPPED = "stopped"
+    STOPPED = "stopped"  # detenido por el usuario (o al salir de IA Workspace)
 
     @property
     def is_active(self) -> bool:
@@ -44,7 +45,13 @@ _ACTIVE = frozenset(
     }
 )
 _TERMINAL = frozenset(
-    {SessionState.DONE, SessionState.ERROR, SessionState.DISCONNECTED, SessionState.STOPPED}
+    {
+        SessionState.DONE,
+        SessionState.FAILED,
+        SessionState.ERROR,
+        SessionState.DISCONNECTED,
+        SessionState.STOPPED,
+    }
 )
 _LABELS = {
     SessionState.STARTING: "Iniciando",
@@ -52,10 +59,11 @@ _LABELS = {
     SessionState.WORKING: "Trabajando",
     SessionState.WAITING_APPROVAL: "Esperando aprobación",
     SessionState.STOPPING: "Deteniendo",
-    SessionState.DONE: "Finalizado",
-    SessionState.ERROR: "Error",
+    SessionState.DONE: "Finalizado correctamente",
+    SessionState.FAILED: "Finalizado con error",
+    SessionState.ERROR: "Error al iniciar",
     SessionState.DISCONNECTED: "Desconectado",
-    SessionState.STOPPED: "Detenido",
+    SessionState.STOPPED: "Detenido por el usuario",
 }
 
 
@@ -70,6 +78,8 @@ class SessionSpec:
     # Argumentos adicionales para la CLI oficial. Nunca credenciales: cada CLI
     # usa su propia autenticación/suscripción ya configurada por el usuario.
     args: tuple[str, ...] = ()
+    # "interactive": sesión de trabajo. "login": flujo oficial de inicio de sesión.
+    mode: str = "interactive"
 
 
 @dataclass

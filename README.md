@@ -4,9 +4,10 @@ Aplicación nativa para Linux (GTK 4 + Libadwaita) para gestionar proyectos loca
 coordinar agentes de IA —Claude Code, Codex y Google Antigravity— junto con
 conversaciones vinculadas de ChatGPT y memoria independiente por proyecto.
 
-> **Estado: fase 2A — terminales reales.** Ventana, navegación, proyectos en SQLite,
-> estado visual por proyecto y terminales VTE por proyecto que siguen ejecutándose en
-> segundo plano. Todavía no hay integraciones con Claude Code, Codex ni Antigravity.
+> **Estado: fase 2B.1 — agentes oficiales.** Proyectos en SQLite, workspaces
+> independientes, terminales VTE persistentes y sesiones de Claude Code, Codex y Google
+> Antigravity mediante sus CLI oficiales. Todavía no hay transferencia automática de
+> prompts, cerebro compartido ni orquestación.
 
 ## Requisitos (paquetes del sistema)
 
@@ -35,6 +36,28 @@ Desde el código fuente, todos los datos (base SQLite, capturas, temporales de p
 se guardan en `var/` dentro del repositorio. Instalada, la aplicación usa
 `$XDG_DATA_HOME/ia-workspace/`. `IAW_DATA_DIR` permite elegir otra carpeta.
 
+## Agentes
+
+| Herramienta | CLI oficial | Estado de sesión | Inicio de sesión |
+|---|---|---|---|
+| Claude Code | `claude` | `claude auth status --json` | `claude auth login` |
+| Codex | `codex --no-daemon` | `codex login status` | `codex login` |
+| Google Antigravity | `agy` | — (lo gestiona la propia CLI) | dentro de la sesión |
+
+En el workspace, el botón **+** de sesiones abre una terminal y su flecha **⌄** permite
+iniciar un agente. La CLI se lanza en la carpeta del proyecto, sin opciones que omitan
+permisos ni aprobaciones, y con tu suscripción e inicio de sesión. El estado de sesión
+solo se consulta al abrir ese menú o con **Preferencias → Integraciones → Comprobar**.
+
+### Conversaciones de ChatGPT
+
+En el panel ChatGPT de cada proyecto, **Vincular conversación** guarda el enlace de una
+conversación (`chatgpt.com/c/…`, `chatgpt.com/g/…/c/…`), de un enlace compartido
+(`chatgpt.com/share/…`) o de sus equivalentes históricos en `chat.openai.com`. Se abre en
+tu navegador con tu sesión habitual. IA Workspace no lee su contenido ni pide credenciales.
+Cada proyecto tiene su propia lista: renombrar, copiar el enlace y desvincular están en el
+menú **⋮** de cada conversación.
+
 ## Atajos
 
 | Acción | Atajo |
@@ -44,6 +67,7 @@ se guardan en `var/` dentro del repositorio. Instalada, la aplicación usa
 | Nuevo prompt | Ctrl+N |
 | Nueva terminal en el proyecto activo | Ctrl+Mayús+T |
 | Barra lateral | F9 |
+| Panel de tareas y memoria (derecho) | Mayús+F9 |
 | Preferencias · Atajos | Ctrl+, · Ctrl+? |
 | Salir | Ctrl+Q |
 

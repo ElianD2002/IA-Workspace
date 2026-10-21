@@ -96,6 +96,19 @@ class NewProject:
     agents: tuple[AgentKind, ...] = SELECTABLE_AGENTS
 
 
+@dataclass(frozen=True)
+class ChatLink:
+    """Conversación de ChatGPT vinculada a un proyecto (solo enlace y título)."""
+
+    id: int
+    project_id: int
+    url: str
+    kind: str  # "private" | "shared" (services.chatgpt_links.LinkKind)
+    conversation_id: str
+    title: str
+    created_at: datetime | None = None
+
+
 @dataclass
 class WorkspaceState:
     """Estado visual de un workspace. Se guarda por proyecto y nunca se comparte."""

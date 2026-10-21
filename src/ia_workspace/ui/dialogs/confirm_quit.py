@@ -6,14 +6,14 @@ from gi.repository import Adw
 
 from ia_workspace.context import AppContext
 from ia_workspace.sessions.models import SessionInfo
-from ia_workspace.ui.widgets import session_label
+from ia_workspace.ui.widgets import is_live_terminal, session_label
 
 
 def build_confirm_quit_dialog(ctx: AppContext, active: list[SessionInfo]) -> Adw.AlertDialog:
     names = {p.id: p.name for p in ctx.projects.list()}
     lines = [
         f"• {s.spec.title or s.spec.kind.label} en «{names.get(s.project_id, '—')}» — "
-        f"{session_label(s.state, s.spec.kind).lower()}"
+        f"{session_label(s.state, is_live_terminal(ctx.sessions, s.id)).lower()}"
         for s in active[:6]
     ]
     if len(active) > 6:

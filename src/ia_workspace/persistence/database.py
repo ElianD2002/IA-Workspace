@@ -41,6 +41,23 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         )
         """,
     ),
+    # 2 — conversaciones de ChatGPT vinculadas a cada proyecto (solo enlace y título;
+    #     nunca el contenido de la conversación ni credenciales).
+    (
+        """
+        CREATE TABLE chat_links (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id      INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            url             TEXT    NOT NULL,
+            link_kind       TEXT    NOT NULL CHECK (link_kind IN ('private', 'shared')),
+            conversation_id TEXT    NOT NULL,
+            title           TEXT    NOT NULL CHECK (length(trim(title)) > 0),
+            created_at      TEXT    NOT NULL,
+            UNIQUE (project_id, link_kind, conversation_id)
+        )
+        """,
+        "CREATE INDEX chat_links_project ON chat_links(project_id, id)",
+    ),
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

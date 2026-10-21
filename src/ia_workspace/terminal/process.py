@@ -21,6 +21,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from ia_workspace.sessions.models import SessionState
+
 PROC = Path("/proc")
 FALLBACK_SHELL = "/bin/sh"
 
@@ -161,3 +163,23 @@ def kill_session(leader: int) -> list[int]:
 def has_foreground_work(leader: int) -> bool:
     """``True`` si la terminal ejecuta algo además de su shell (para confirmar al cerrar)."""
     return any(p.pid != leader for p in session_members(leader))
+
+
+def classify_exit(code: int, stop_requested: bool) -> tuple[SessionState, str]:
+    """Estado final a partir del código de salida real del proceso.
+
+    * Detenido por el usuario (o al salir de IA Workspace): ``STOPPED``, sea cual sea el código.
+    * Código 0: ``DONE``.
+    * Cualquier otro código, o una señal que no enviamos nosotros: ``FAILED``.
+    """
+    if stop_requested:
+        return SessionState.STOPPED, "Detenido por el usuario"
+    if code == 0:
+        return SessionState.DONE, "Finalizado correctamente · código 0"
+    if code < 0:
+        try:
+            name = signal.Signals(-code).name
+        except ValueError:
+            name = f"señal {-code}"
+        return SessionState.FAILED, f"Finalizado con error · terminado por {name}"
+    return SessionState.FAILED, f"Finalizado con error · código {code}"

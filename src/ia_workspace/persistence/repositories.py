@@ -6,12 +6,16 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 
-from ia_workspace.domain.models import AgentKind, NewProject, Project, WorkspaceState
+from ia_workspace.domain.models import AgentKind, ChatLink, NewProject, Project, WorkspaceState
 from ia_workspace.persistence.database import Database
 
 
 class DuplicateProjectError(Exception):
     """Ya existe un proyecto registrado con la misma carpeta."""
+
+
+class DuplicateChatLinkError(Exception):
+    """La conversación ya está vinculada a ese proyecto."""
 
 
 def _now() -> str:
@@ -97,6 +101,65 @@ class ProjectRepository:
     def remove(self, project_id: int) -> None:
         with self._conn:
             self._conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+
+
+class ChatLinkRepository:
+    def __init__(self, db: Database) -> None:
+        self._conn = db.conn
+
+    @staticmethod
+    def _row(row: sqlite3.Row) -> ChatLink:
+        return ChatLink(
+            id=row["id"],
+            project_id=row["project_id"],
+            url=row["url"],
+            kind=row["link_kind"],
+            conversation_id=row["conversation_id"],
+            title=row["title"],
+            created_at=_parse_dt(row["created_at"]),
+        )
+
+    def add(self, project_id: int, url: str, kind: str, conversation_id: str, title: str) -> ChatLink:
+        try:
+            with self._conn:
+                cur = self._conn.execute(
+                    "INSERT INTO chat_links (project_id, url, link_kind, conversation_id, title, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (project_id, url, kind, conversation_id, title.strip(), _now()),
+                )
+        except sqlite3.IntegrityError as exc:
+            if "UNIQUE" in str(exc):
+                raise DuplicateChatLinkError(url) from exc
+            raise
+        link = self.get(int(cur.lastrowid))
+        assert link is not None
+        return link
+
+    def get(self, link_id: int) -> ChatLink | None:
+        row = self._conn.execute("SELECT * FROM chat_links WHERE id = ?", (link_id,)).fetchone()
+        return self._row(row) if row else None
+
+    def find(self, project_id: int, kind: str, conversation_id: str) -> ChatLink | None:
+        row = self._conn.execute(
+            "SELECT * FROM chat_links WHERE project_id = ? AND link_kind = ? AND conversation_id = ?",
+            (project_id, kind, conversation_id),
+        ).fetchone()
+        return self._row(row) if row else None
+
+    def list(self, project_id: int) -> list[ChatLink]:
+        """Conversaciones de un único proyecto, la más reciente primero."""
+        rows = self._conn.execute(
+            "SELECT * FROM chat_links WHERE project_id = ? ORDER BY id DESC", (project_id,)
+        ).fetchall()
+        return [self._row(r) for r in rows]
+
+    def rename(self, link_id: int, title: str) -> None:
+        with self._conn:
+            self._conn.execute("UPDATE chat_links SET title = ? WHERE id = ?", (title.strip(), link_id))
+
+    def remove(self, link_id: int) -> None:
+        with self._conn:
+            self._conn.execute("DELETE FROM chat_links WHERE id = ?", (link_id,))
 
 
 class WorkspaceStateRepository:

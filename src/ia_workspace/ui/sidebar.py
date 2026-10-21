@@ -33,7 +33,12 @@ NAV_ITEMS: tuple[NavItem, ...] = (
     NavItem("history", "Historial", "document-open-recent-symbolic", "<Alt>6"),
 )
 
-ATTENTION_STATES = (SessionState.WAITING_APPROVAL, SessionState.ERROR, SessionState.DISCONNECTED)
+ATTENTION_STATES = (
+    SessionState.WAITING_APPROVAL,
+    SessionState.FAILED,
+    SessionState.ERROR,
+    SessionState.DISCONNECTED,
+)
 
 
 def _menu_model() -> Gio.Menu:
@@ -192,7 +197,8 @@ class Sidebar(Adw.Bin):
             mine = [s for s in sessions if s.project_id == project_id]
             states = {s.state for s in mine}
             if states & set(ATTENTION_STATES):
-                style = "error" if SessionState.ERROR in states else "wait"
+                failed = states & {SessionState.ERROR, SessionState.FAILED}
+                style = "error" if failed else "wait"
                 holder.append(w.status_dot(style, "Requiere tu atención"))
             elif SessionState.WORKING in states or SessionState.STARTING in states:
                 spinner = Adw.Spinner(tooltip_text="Agente trabajando")

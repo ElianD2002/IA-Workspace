@@ -233,14 +233,36 @@ class TerminalLifecycleTest(unittest.TestCase):
                 view_b._last_dialog.emit("response", "confirm")
                 view_b._last_dialog.force_close()
                 check(pump(lambda: session(b2).state is SessionState.STOPPED, 8), "detener b2 no funcionó")
+                check(session(b2).state.label == "Detenido por el usuario", session(b2).state.label)
                 check("SALIDA_FINAL_B2" in text(b2), "la salida de b2 no se conservó al detenerla")
 
                 # Fin natural del shell: DONE con su código de salida.
                 b3 = view_b.new_terminal()
                 check(ready(b3), "la tercera terminal de B no arrancó")
                 run(b3, "exit 3")
-                check(pump(lambda: session(b3).state is SessionState.DONE, 5), "exit no finalizó la sesión")
+                check(pump(lambda: session(b3).state is SessionState.FAILED, 5), "exit 3 no se marcó como error")
                 check(session(b3).exit_code == 3, f"código de salida: {session(b3).exit_code}")
+                check("código 3" in session(b3).detail, f"detalle: {session(b3).detail}")
+
+                # Código 0: finalizado correctamente. La salida se conserva para diagnóstico.
+                b4 = view_b.new_terminal()
+                check(ready(b4), "la cuarta terminal de B no arrancó")
+                run(b4, "echo ANTES_DE_SALIR; exit 0")
+                check(pump(lambda: session(b4).state is SessionState.DONE, 5), f"exit 0: {session(b4).state}")
+                check("ANTES_DE_SALIR" in text(b4), "se perdió la salida tras terminar")
+                check(session(b4).state.label == "Finalizado correctamente", session(b4).state.label)
+
+                # Una señal que no envió el usuario es un error, no «finalizado».
+                b5 = view_b.new_terminal()
+                check(ready(b5), "la quinta terminal de B no arrancó")
+                run(b5, "echo VISIBLE_TRAS_SIGKILL")
+                pump(lambda: text(b5).count("VISIBLE_TRAS_SIGKILL") >= 2)
+                os.kill(handle(b5).pid, 9)
+                check(pump(lambda: session(b5).state is SessionState.FAILED, 5), f"SIGKILL: {session(b5).state}")
+                check("SIGKILL" in session(b5).detail, f"detalle: {session(b5).detail}")
+                check("VISIBLE_TRAS_SIGKILL" in text(b5), "se perdió la salida tras el error")
+                view_b._select_session(b5)
+                check(view_b._session_meta.get_label() == session(b5).detail, "la barra no muestra el error")
 
                 # Procesos que intentan sobrevivir al cierre.
                 run(a1, "nohup sleep 300 >/dev/null 2>&1 &")

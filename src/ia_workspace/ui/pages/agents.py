@@ -8,7 +8,7 @@ from ia_workspace.sessions.models import SessionState
 from ia_workspace.ui import widgets as w
 from ia_workspace.ui.pages.base import Navigator, Page, scrolled_clamp
 
-ATTENTION = (SessionState.WAITING_APPROVAL, SessionState.ERROR, SessionState.DISCONNECTED)
+ATTENTION = (SessionState.WAITING_APPROVAL, SessionState.FAILED, SessionState.ERROR, SessionState.DISCONNECTED)
 
 
 class AgentsPage(Page):
@@ -55,7 +55,7 @@ class AgentsPage(Page):
             for s in mine:
                 row = Adw.ActionRow(title=s.spec.title or s.spec.kind.label, subtitle=s.spec.kind.label)
                 row.add_prefix(w.tool_chip(s.spec.kind))
-                row.add_suffix(w.session_pill(s.state, s.spec.kind))
+                row.add_suffix(w.session_pill(s.state, w.is_live_terminal(self.ctx.sessions, s.id)))
                 if s.state.is_active:
                     stop = Gtk.Button(icon_name="media-playback-stop-symbolic", valign=Gtk.Align.CENTER,
                                       tooltip_text="Detener sesión")

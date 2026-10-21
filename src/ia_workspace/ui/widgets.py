@@ -8,6 +8,7 @@ from pathlib import Path
 from gi.repository import Adw, Gtk, Pango
 
 from ia_workspace.domain.models import AgentKind, Project
+from ia_workspace.sessions.backend import ViewableHandle
 from ia_workspace.sessions.models import SessionState
 
 # Estado de sesión → clase visual del prototipo (working, wait, done, error, off, idle).
@@ -18,6 +19,7 @@ STATE_STYLE = {
     SessionState.WAITING_APPROVAL: "wait",
     SessionState.STOPPING: "wait",
     SessionState.DONE: "done",
+    SessionState.FAILED: "error",
     SessionState.ERROR: "error",
     SessionState.DISCONNECTED: "off",
     SessionState.STOPPED: "off",
@@ -58,14 +60,21 @@ def status_pill(text: str, style: str, spinning: bool = False) -> Gtk.Box:
     return box
 
 
-def session_label(state: SessionState, kind: AgentKind | None = None) -> str:
-    if kind is AgentKind.SHELL and state is SessionState.IDLE:
+def session_label(state: SessionState, live_terminal: bool = False) -> str:
+    """Las sesiones con terminal real (shell o CLI de un agente) no informan de si
+    están «listas» o «trabajando»: mientras su proceso vive, están en ejecución."""
+    if live_terminal and state is SessionState.IDLE:
         return "En ejecución"
     return state.label
 
 
-def session_pill(state: SessionState, kind: AgentKind | None = None) -> Gtk.Box:
-    return status_pill(session_label(state, kind), STATE_STYLE[state], spinning=state is SessionState.WORKING)
+def is_live_terminal(sessions: object, session_id: str) -> bool:
+    return isinstance(sessions.handle(session_id), ViewableHandle)  # type: ignore[attr-defined]
+
+
+def session_pill(state: SessionState, live_terminal: bool = False) -> Gtk.Box:
+    return status_pill(session_label(state, live_terminal), STATE_STYLE[state],
+                       spinning=state is SessionState.WORKING)
 
 
 def status_dot(style: str, tooltip: str | None = None) -> Gtk.Box:

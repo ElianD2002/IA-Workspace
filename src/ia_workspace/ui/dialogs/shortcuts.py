@@ -12,6 +12,7 @@ SECTIONS = (
         ("Nuevo prompt", "<Control>n"),
         ("Nueva terminal en el proyecto activo", "<Control><Shift>t"),
         ("Mostrar u ocultar barra lateral", "F9"),
+        ("Mostrar u ocultar el panel de tareas y memoria", "<Shift>F9"),
         ("Menú principal", "F10"),
         ("Preferencias", "<Control>comma"),
         ("Atajos de teclado", "<Control>question"),

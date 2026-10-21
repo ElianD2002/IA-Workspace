@@ -7,9 +7,11 @@ modo que los procesos nunca se bloquean ni se reinician por la navegación.
 
 Ciclo de vida de una sesión:
 
-    start ─► STARTING ─(spawn ok)─► IDLE ─(el proceso termina)─► DONE
-                │                     │
-                └─(fallo)─► ERROR     └─ stop() ─► STOPPING ─► STOPPED
+    start ─► STARTING ─(spawn ok)─► IDLE ─(el proceso termina)─► DONE   (código 0)
+                │                     │                       └─► FAILED (código ≠ 0 o señal ajena)
+                └─(fallo)─► ERROR     └─ stop() ─► STOPPING ─► STOPPED (detenido por el usuario)
+
+La salida de la terminal se conserva tras terminar, para el diagnóstico.
 
 ``stop()`` envía SIGHUP a toda la sesión de la terminal (igual que cerrar un
 emulador de terminal) y, si algo sigue vivo tras ``STOP_GRACE_SECONDS``, SIGKILL.
@@ -36,6 +38,7 @@ from ia_workspace.domain.models import AgentKind  # noqa: E402
 from ia_workspace.sessions.backend import SessionSink  # noqa: E402
 from ia_workspace.sessions.models import SessionSpec, SessionState  # noqa: E402
 from ia_workspace.terminal import process, theme  # noqa: E402
+from ia_workspace.terminal.process import classify_exit  # noqa: E402
 
 STOP_GRACE_SECONDS = 5.0
 STRAGGLER_GRACE_SECONDS = 1.0
@@ -49,6 +52,7 @@ def _default_argv(spec: SessionSpec) -> list[str]:
 
 
 def _exit_code(wait_status: int) -> int:
+    """Código de salida; negativo (``-señal``) si el proceso murió por una señal."""
     try:
         return os.waitstatus_to_exitcode(wait_status)
     except ValueError:
@@ -171,10 +175,8 @@ class VteTerminalHandle:
         return GLib.SOURCE_REMOVE
 
     def _report_exit(self, code: int) -> None:
-        if self._stop_requested:
-            self._report(SessionState.STOPPED, "Detenida", code)
-        else:
-            self._report(SessionState.DONE, f"Finalizada · código {code}", code)
+        state, detail = classify_exit(code, self._stop_requested)
+        self._report(state, detail, code)
 
     def _on_grace_expired(self) -> bool:
         self._timer = None

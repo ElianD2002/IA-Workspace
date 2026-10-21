@@ -36,7 +36,7 @@ if python3 -m ruff --version >/dev/null 2>&1; then
 fi
 
 echo "== Pruebas de lógica"
-(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process)
+(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process test_agents test_fixes)
 
 source "$ROOT/scripts/_broadway.sh"
 if start_broadway; then
@@ -48,7 +48,7 @@ run_ui_test() {  # $1 = módulo, $2 = título
   echo "== $2 (Broadway aislado)"
   local log="$ROOT/var/$1.log"
   (cd tests && python3 -m unittest -v "$1") 2>&1 | tee "$log" | tail -3
-  if grep -E "(CRITICAL|Gtk-WARNING|Adwaita-WARNING|Vte-WARNING|Traceback)" "$log"; then
+  if grep -E "(CRITICAL|Gtk-WARNING|Adwaita-WARNING|Vte-WARNING|GLib-WARNING|Warning: g_|Traceback)" "$log"; then
     echo "La prueba $1 emitió avisos de GTK" >&2
     exit 1
   fi
@@ -60,4 +60,12 @@ run_ui_test() {  # $1 = módulo, $2 = título
 
 run_ui_test test_ui "Prueba de interfaz"
 run_ui_test test_terminals "Terminales VTE reales"
+run_ui_test test_agents_ui "Agentes con CLI falsas"
+run_ui_test test_workspace_ui "Panel derecho y conversaciones"
+
+# Ningún dato de cuenta (de los dobles de prueba) debe acabar en registros.
+if grep -rIl -E "persona@example\.invalid|FAKE-ORG-SECRET-123" "$ROOT/var"/*.log 2>/dev/null; then
+  echo "Se filtraron datos de cuenta a los registros" >&2
+  exit 1
+fi
 echo "Todo correcto."

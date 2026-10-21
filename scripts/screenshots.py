@@ -121,8 +121,25 @@ def main() -> None:
             for screen in ("home", "projects", "agents", "memory"):
                 win.navigate(screen)
                 capture(win, f"{scheme}-{('home', 'projects', 'agents', 'memory').index(screen) + 1:02d}-{screen}")
+            ctx.chat_links.link(ids[0], "https://chatgpt.com/c/6718a2b4-1c2d-8000-9f3a-0123456789ab",
+                                "Plan: mantenimiento preventivo")
+            ctx.chat_links.link(ids[0], "https://chatgpt.com/share/aaaabbbb-cccc-8000-9999-000011112222",
+                                "Esquema de facturación (compartido)")
             win.open_project(ids[0])
             capture(win, f"{scheme}-05-workspace")
+            win.set_default_size(1024, 768)
+            view.request_link_conversation()
+            view._last_dialog.url_row.set_text("https://chatgpt.com/share/0f0e0d0c-0b0a-8000-9999-aabbccddeeff")
+            capture(win, f"{scheme}-05a-vincular")
+            view._last_dialog.force_close()
+            view.set_context_visible(False)
+            win.queue_resize()
+            capture(win, f"{scheme}-05c-panel-oculto")
+            view.set_context_visible(True)
+            win._split.set_show_sidebar(False)  # deja sitio para el panel ChatGPT a 1024 px
+            win.queue_resize()
+            capture(win, f"{scheme}-05d-conversaciones")
+            win._split.set_show_sidebar(True)
             terminal = view.new_terminal()
             if terminal:
                 pump(1.0)

@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
-from ia_workspace.domain.models import AgentKind, Project
+from ia_workspace.agents.auth import AuthState
+from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind, Project
+from ia_workspace.services.chat_links import kind_of
+from ia_workspace.services.chatgpt_links import parse_chat_link
 from ia_workspace.services.detection import inspect_folder
 from ia_workspace.sessions.backend import ViewableHandle
 from ia_workspace.sessions.manager import SessionError
@@ -70,6 +73,14 @@ class WorkspaceView(Page):
         folder = Gtk.Button(icon_name="folder-open-symbolic", tooltip_text="Abrir carpeta del proyecto")
         folder.connect("clicked", lambda _b: self._open_folder())
         self.header.pack_start(folder)
+        # Simétrico al botón de la barra lateral izquierda: extremo derecho de la cabecera.
+        self._context_toggle = Gtk.ToggleButton(
+            icon_name="sidebar-show-right-symbolic",
+            active=self.state.show_context,
+            tooltip_text="Panel de tareas y memoria (Mayús+F9)",
+        )
+        self._context_toggle.connect("toggled", lambda b: self.set_context_visible(b.get_active()))
+        self.header.pack_end(self._context_toggle)
         self.header.pack_end(self._panels_button())
 
         self._outer = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL, wide_handle=False)
@@ -144,6 +155,21 @@ class WorkspaceView(Page):
             icon_name="view-dual-symbolic", popover=popover, tooltip_text="Paneles del workspace"
         )
 
+    def set_context_visible(self, visible: bool) -> None:
+        """Muestra u oculta el panel derecho (Tareas / Memoria) de este proyecto.
+
+        Solo cambia la visibilidad: la pestaña elegida y el contenido se conservan. La
+        preferencia se guarda por proyecto y se recupera al volver o al reiniciar.
+        """
+        if self.state.show_context != visible:
+            self.state.show_context = visible
+            self._changed()
+        self._apply_panels()
+
+    def toggle_context(self) -> None:
+        if "show_context" not in self._narrow:
+            self.set_context_visible(not self.state.show_context)
+
     def _on_panel_switch(self, switch: Gtk.Switch, _pspec: object, key: str) -> None:
         if getattr(self.state, key) != switch.get_active():
             setattr(self.state, key, switch.get_active())
@@ -164,6 +190,16 @@ class WorkspaceView(Page):
         for key, switch in self._panel_switches.items():
             switch.set_sensitive(key not in self._narrow)
             switch.set_tooltip_text("Necesita una ventana más ancha" if key in self._narrow else None)
+            if switch.get_active() != getattr(self.state, key):
+                switch.set_active(getattr(self.state, key))
+        if hasattr(self, "_context_toggle"):
+            narrow = "show_context" in self._narrow
+            if self._context_toggle.get_active() != self.state.show_context:
+                self._context_toggle.set_active(self.state.show_context)
+            self._context_toggle.set_sensitive(not narrow)
+            self._context_toggle.set_tooltip_text(
+                "Necesita una ventana más ancha" if narrow else "Panel de tareas y memoria (Mayús+F9)"
+            )
 
     def _reset_layout(self) -> None:
         for key, _label, _icon in PANELS:
@@ -182,44 +218,158 @@ class WorkspaceView(Page):
     def _build_chat_pane(self) -> Gtk.Widget:
         pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, width_request=260)
         pane.add_css_class("side-pane")
-        link = Gtk.Button(icon_name="insert-link-symbolic", sensitive=False)
-        link.set_tooltip_text("Vincular conversación — disponible en una próxima fase")
+        link = Gtk.Button(icon_name="insert-link-symbolic", tooltip_text="Vincular conversación")
         link.add_css_class("flat")
+        link.connect("clicked", lambda _b: self.request_link_conversation())
         external = Gtk.Button(icon_name="send-to-symbolic", tooltip_text="Abrir ChatGPT en el navegador")
         external.add_css_class("flat")
         external.connect("clicked", lambda _b: self._open_chatgpt())
         pane.append(_pane_header(_pane_title("ChatGPT", w.tool_chip("gpt", "GPT", "ChatGPT")), link, external))
 
+        self._chat_stack = Gtk.Stack(vexpand=True)
         buttons = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, halign=Gtk.Align.CENTER)
-        bind = Gtk.Button(label="Vincular conversación", sensitive=False)
+        bind = Gtk.Button(label="Vincular conversación")
         bind.add_css_class("suggested-action")
         bind.add_css_class("pill")
-        bind.set_tooltip_text("Disponible en una próxima fase")
+        bind.connect("clicked", lambda _b: self.request_link_conversation())
         buttons.append(bind)
         browser = Gtk.Button(label="Abrir ChatGPT en el navegador")
         browser.add_css_class("flat")
         browser.connect("clicked", lambda _b: self._open_chatgpt())
         buttons.append(browser)
-        pane.append(
+        self._chat_stack.add_named(
             _compact_status(
                 "user-available-symbolic",
                 "Sin conversaciones vinculadas",
                 "Pega el enlace de una conversación de ChatGPT para tenerla a mano en este proyecto.",
                 buttons,
-            )
+            ),
+            "empty",
         )
-        note = w.caption("IA Workspace no lee tu historial de ChatGPT. Solo mostrará las conversaciones que vincules.")
+
+        listing = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_start=12, margin_end=12,
+                          margin_top=12, margin_bottom=12)
+        heading = w.caption("Conversaciones vinculadas")
+        heading.add_css_class("heading")
+        listing.append(heading)
+        self._chat_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self._chat_list.add_css_class("boxed-list")
+        listing.append(self._chat_list)
+        self._chat_stack.add_named(
+            Gtk.ScrolledWindow(child=listing, hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True), "list"
+        )
+        pane.append(self._chat_stack)
+
+        note = w.caption("IA Workspace no lee tu historial de ChatGPT. Solo muestra las conversaciones que vinculas.")
         note.set_wrap(True)
         note.set_ellipsize(Pango.EllipsizeMode.NONE)
         note.set_margin_start(14)
         note.set_margin_end(14)
         note.set_margin_bottom(14)
         pane.append(note)
+
+        self.ctx.chat_links.subscribe(self._on_links_changed)
+        self._render_links()
         return pane
 
     def _open_chatgpt(self) -> None:
         # Se abre en el navegador del usuario: usa su propia sesión y suscripción.
-        Gtk.UriLauncher(uri=CHATGPT_URL).launch(self.get_root(), None, None, None)
+        self._open_uri(CHATGPT_URL)
+
+    def _open_uri(self, uri: str) -> None:
+        Gtk.UriLauncher(uri=uri).launch(self.get_root(), None, None, None)
+
+    # ---- conversaciones vinculadas ----------------------------------------------------
+
+    def _on_links_changed(self, project_id: int) -> None:
+        if project_id == self.project.id:  # nunca se mezclan conversaciones entre proyectos
+            self._render_links()
+
+    def _render_links(self) -> None:
+        links = self.ctx.chat_links.list(self.project.id)
+        w.clear_box(self._chat_list)
+        for link in links:
+            self._chat_list.append(self._link_row(link))
+        self._chat_stack.set_visible_child_name("list" if links else "empty")
+
+    def _link_row(self, link) -> Gtk.Widget:
+        kind = kind_of(link)
+        short = parse_chat_link(link.url).short
+        when = w.relative_time(link.created_at)
+        row = Adw.ActionRow(title=link.title, subtitle=f"{kind.short_label} · {short} · {when}",
+                            use_markup=False, activatable=True, tooltip_text=f"Abrir en el navegador: {link.url}")
+        row.link_id = link.id  # type: ignore[attr-defined]
+        row.connect("activated", lambda _r: self._open_link(link.id))  # clic, Intro o activación
+        icon = Gtk.Image.new_from_icon_name("folder-publicshare-symbolic" if kind.value == "shared"
+                                            else "user-available-symbolic")
+        icon.add_css_class("dim-label")
+        icon.set_tooltip_text(kind.label)
+        row.add_prefix(icon)
+
+        group = Gio.SimpleActionGroup()
+        for name, handler in (
+            ("open", lambda *_: self._open_link(link.id)),
+            ("copy", lambda *_: self._copy_link(link.id)),
+            ("rename", lambda *_: self._rename_link(link.id)),
+            ("unlink", lambda *_: self._unlink(link.id)),
+        ):
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", handler)
+            group.add_action(action)
+        menu = Gio.Menu()
+        menu.append("Abrir en el navegador", "link.open")
+        menu.append("Copiar enlace", "link.copy")
+        menu.append("Renombrar…", "link.rename")
+        danger = Gio.Menu()
+        danger.append("Desvincular…", "link.unlink")
+        menu.append_section(None, danger)
+        more = Gtk.MenuButton(icon_name="view-more-symbolic", menu_model=menu, valign=Gtk.Align.CENTER,
+                              tooltip_text="Más opciones")
+        more.add_css_class("flat")
+        more.insert_action_group("link", group)
+        row.add_suffix(more)
+        return row
+
+    def request_link_conversation(self) -> None:
+        from ia_workspace.ui.dialogs.chat_link import LinkConversationDialog
+
+        dialog = LinkConversationDialog(
+            self.ctx.chat_links, self.project.id, self.project.name,
+            on_saved=lambda link: self.nav.toast(f"«{link.title}» vinculada a {self.project.name}"),
+            on_error=self.nav.toast,
+        )
+        dialog.present(self.get_root())
+        self._last_dialog = dialog
+
+    def _open_link(self, link_id: int) -> None:
+        link = self.ctx.chat_links.get(link_id)
+        if link is not None and link.project_id == self.project.id:
+            # Validado al guardarlo y otra vez aquí: solo se abren enlaces de chatgpt.com.
+            self._open_uri(parse_chat_link(link.url).url)
+
+    def _copy_link(self, link_id: int) -> None:
+        link = self.ctx.chat_links.get(link_id)
+        if link is not None:
+            self.get_clipboard().set(link.url)
+            self.nav.toast("Enlace copiado")
+
+    def _rename_link(self, link_id: int) -> None:
+        from ia_workspace.ui.dialogs.chat_link import build_rename_dialog
+
+        link = self.ctx.chat_links.get(link_id)
+        if link is not None:
+            dialog = build_rename_dialog(self.ctx.chat_links, link, self.nav.toast)
+            dialog.present(self.get_root())
+            self._last_dialog = dialog
+
+    def _unlink(self, link_id: int) -> None:
+        from ia_workspace.ui.dialogs.chat_link import build_unlink_dialog
+
+        link = self.ctx.chat_links.get(link_id)
+        if link is not None:
+            dialog = build_unlink_dialog(self.ctx.chat_links, link)
+            dialog.present(self.get_root())
+            self._last_dialog = dialog
 
     # ---- panel Prompt -----------------------------------------------------------------
 
@@ -313,9 +463,14 @@ class WorkspaceView(Page):
     def _build_sessions_pane(self) -> Gtk.Widget:
         pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, height_request=180)
         self._tabs = Gtk.Box(spacing=4, hexpand=True)
-        self._new_session = Gtk.Button(icon_name="list-add-symbolic")
+        self._agent_menu = Gio.Menu()
+        self._agent_popover = Gtk.PopoverMenu.new_from_model(self._agent_menu)
+        self._agent_popover.connect("show", lambda _p: self._check_agents())
+        self._new_session = Adw.SplitButton(icon_name="list-add-symbolic", popover=self._agent_popover,
+                                            dropdown_tooltip="Iniciar un agente")
         self._new_session.add_css_class("flat")
         self._new_session.connect("clicked", lambda _b: self.new_terminal())
+        self._setup_agent_actions()
         tabs_scroll = Gtk.ScrolledWindow(child=self._tabs, vscrollbar_policy=Gtk.PolicyType.NEVER, hexpand=True)
         pane.append(_pane_header(tabs_scroll, self._new_session))
 
@@ -369,7 +524,6 @@ class WorkspaceView(Page):
         self._pending_close: set[str] = set()
         self._terminal_seq = 0
         available = self._terminals_available()
-        self._new_session.set_sensitive(available)
         empty_button.set_sensitive(available)
         self._new_session.set_tooltip_text(
             "Nueva terminal (Ctrl+Mayús+T)" if available else "Terminales no disponibles: falta gir1.2-vte-3.91"
@@ -390,6 +544,111 @@ class WorkspaceView(Page):
         self._terminal_seq += 1
         spec = SessionSpec(project_id=self.project.id, kind=AgentKind.SHELL, cwd=self.project.path,
                            title=f"Terminal {self._terminal_seq}")
+        try:
+            info = self.ctx.sessions.start(spec)
+        except SessionError as exc:
+            self.nav.toast(str(exc))
+            return None
+        self._select_session(info.id)
+        return info.id
+
+    # ---- agentes (Claude Code, Codex, Antigravity) -------------------------------------
+
+    def _setup_agent_actions(self) -> None:
+        group = Gio.SimpleActionGroup()
+        self._agent_actions: dict[str, Gio.SimpleAction] = {}
+
+        def add(name: str, handler) -> None:
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", lambda *_: handler())
+            group.add_action(action)
+            self._agent_actions[name] = action
+
+        add("new-terminal", self.new_terminal)
+        add("check-agents", lambda: self._check_agents(force=True))
+        for kind in SELECTABLE_AGENTS:
+            add(f"start-{kind.value}", lambda k=kind: self.start_agent(k))
+            add(f"login-{kind.value}", lambda k=kind: self._launch_agent(k, login=True))
+        self.insert_action_group("ws", group)
+        self._agent_seq: dict[AgentKind, int] = {}
+        self.ctx.agents.subscribe(lambda _kind: self._update_agent_menu())
+        self._update_agent_menu()
+
+    def _update_agent_menu(self) -> None:
+        menu = self._agent_menu
+        menu.remove_all()
+        first = Gio.Menu()
+        first.append("Nueva terminal", "ws.new-terminal")
+        menu.append_section(None, first)
+        agents = Gio.Menu()
+        logins = Gio.Menu()
+        for status in self.ctx.agents.statuses():
+            kind = status.kind
+            agents.append(f"{kind.label} · {status.summary}", f"ws.start-{kind.value}")
+            self._agent_actions[f"start-{kind.value}"].set_enabled(status.installed)
+            needs_login = (
+                status.installed and status.tool.supports_login and status.auth is AuthState.LOGGED_OUT
+            )
+            self._agent_actions[f"login-{kind.value}"].set_enabled(needs_login)
+            if needs_login:
+                logins.append(f"Iniciar sesión en {kind.label}…", f"ws.login-{kind.value}")
+        menu.append_section("Agentes", agents)
+        if logins.get_n_items():
+            menu.append_section(None, logins)
+        last = Gio.Menu()
+        last.append("Comprobar de nuevo", "ws.check-agents")
+        menu.append_section(None, last)
+
+    def _check_agents(self, force: bool = False) -> None:
+        """Comprueba instalación y sesión con los comandos oficiales (solo bajo demanda)."""
+        self.ctx.agents.detect()
+        for status in self.ctx.agents.statuses():
+            if status.installed:
+                if force:
+                    self.ctx.agents.refresh(status.kind)
+                else:
+                    self.ctx.agents.ensure_checked(status.kind)
+
+    def start_agent(self, kind: AgentKind) -> str | None:
+        """Inicia la CLI oficial del agente en la carpeta del proyecto."""
+        status = self.ctx.agents.status(kind)
+        if not status.installed and not self.ctx.simulated_agents:
+            self.nav.toast(f"{kind.label} no está instalado. {status.tool.install_hint}.")
+            return None
+        if status.auth is AuthState.LOGGED_OUT and status.tool.supports_login:
+            dialog = Adw.AlertDialog(
+                heading=f"{kind.label} requiere iniciar sesión",
+                body=(
+                    f"Inicia sesión con tu cuenta mediante el flujo oficial de {kind.label}; se abrirá "
+                    "en esta terminal y, si hace falta, en tu navegador. IA Workspace no ve ni "
+                    "guarda tus credenciales."
+                ),
+            )
+            dialog.add_response("cancel", "Cancelar")
+            dialog.add_response("open", "Abrir de todos modos")
+            dialog.add_response("login", "Iniciar sesión")
+            dialog.set_response_appearance("login", Adw.ResponseAppearance.SUGGESTED)
+            dialog.set_default_response("login")
+            dialog.set_close_response("cancel")
+
+            def on_response(_d: Adw.AlertDialog, response: str) -> None:
+                if response in ("open", "login"):
+                    self._launch_agent(kind, login=response == "login")
+
+            dialog.connect("response", on_response)
+            dialog.present(self.get_root())
+            self._last_dialog = dialog
+            return None
+        return self._launch_agent(kind)
+
+    def _launch_agent(self, kind: AgentKind, *, login: bool = False) -> str | None:
+        if login:
+            title = f"Inicio de sesión · {kind.label}"
+        else:
+            self._agent_seq[kind] = self._agent_seq.get(kind, 0) + 1
+            title = f"{kind.label} {self._agent_seq[kind]}"
+        spec = SessionSpec(project_id=self.project.id, kind=kind, cwd=self.project.path, title=title,
+                           mode="login" if login else "interactive")
         try:
             info = self.ctx.sessions.start(spec)
         except SessionError as exc:
@@ -524,7 +783,7 @@ class WorkspaceView(Page):
         return host
 
     def _state_label(self, info: SessionInfo) -> str:
-        return w.session_label(info.state, info.spec.kind)
+        return w.session_label(info.state, info.id in self._terminal_hosts)
 
     def _render_sessions(self) -> None:
         sessions = self._sessions()
@@ -572,7 +831,10 @@ class WorkspaceView(Page):
         if is_terminal:
             pid = getattr(self.ctx.sessions.handle(selected.id), "pid", None)
             where = w.short_path(selected.spec.cwd)
-            self._session_meta.set_label(f"{where} · PID {pid}" if pid else where)
+            if selected.state.is_terminal and selected.detail:
+                self._session_meta.set_label(selected.detail)  # p. ej. «Finalizado con error · código 1»
+            else:
+                self._session_meta.set_label(f"{where} · PID {pid}" if pid else where)
             self._output_stack.set_visible_child_name(selected.id)
         else:
             started = selected.started_at.astimezone().strftime("%H:%M")
@@ -609,6 +871,8 @@ class WorkspaceView(Page):
             if host is not None:
                 self._output_stack.remove(host)
         elif event.kind == "state" and event.session.state.is_terminal:
+            if event.session.spec.mode == "login" and event.session.spec.kind in SELECTABLE_AGENTS:
+                self.ctx.agents.refresh(event.session.spec.kind)
             if session_id in self._pending_close:
                 self._remove_session(session_id)
                 return  # remove() emite «removed», que vuelve a dibujar

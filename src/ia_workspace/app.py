@@ -18,8 +18,10 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 from ia_workspace import APP_ID, APP_NAME, VERSION
 from ia_workspace.config import resolve_paths
 from ia_workspace.context import AppContext
+from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind
 from ia_workspace.persistence.database import Database
 from ia_workspace.sessions.manager import Callback
+from ia_workspace.sessions.models import SessionSpec
 
 SHUTDOWN_GRACE_SECONDS = 10.0
 
@@ -53,11 +55,12 @@ def _glib_schedule(seconds: float, fn: Callback) -> Callback:
 class IAWorkspaceApplication(Adw.Application):
     def __init__(self) -> None:
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
-        GLib.set_application_name(APP_NAME)
+        if GLib.get_application_name() != APP_NAME:  # solo una vez por proceso
+            GLib.set_application_name(APP_NAME)
         self.ctx: AppContext | None = None
         self._window = None
         self._quitting = False
-        self.terminal_backend = None
+        self.terminal_backends: list = []
 
     # ---- ciclo de vida ---------------------------------------------------------
 
@@ -89,9 +92,9 @@ class IAWorkspaceApplication(Adw.Application):
         self._window.present()
 
     def do_shutdown(self) -> None:
-        if self.terminal_backend is not None:
-            # Red de seguridad: ningún proceso gestionado sobrevive a la aplicación.
-            self.terminal_backend.kill_all()
+        # Red de seguridad: ningún proceso gestionado sobrevive a la aplicación.
+        for backend in self.terminal_backends:
+            backend.kill_all()
         if self._window is not None:
             self._window.save_state()
         if self.ctx is not None:
@@ -106,8 +109,25 @@ class IAWorkspaceApplication(Adw.Application):
             print(f"IA Workspace: terminales no disponibles ({exc})", file=sys.stderr)
             return
         assert self.ctx is not None
-        self.terminal_backend = VteTerminalBackend()
-        self.ctx.sessions.register_backend(self.terminal_backend)
+        ctx = self.ctx
+        backends = [VteTerminalBackend()]
+        if not ctx.simulated_agents:
+            # Agentes reales: su CLI oficial dentro de una terminal VTE. En modo simulado
+            # (desarrollo y pruebas) nunca se lanzan, para no consumir sesiones de IA.
+            from ia_workspace.agents.tools import build_launch_argv, build_login_argv
+
+            def argv_for(kind: AgentKind):
+                def build(spec: SessionSpec) -> list[str]:
+                    if spec.mode == "login":
+                        return build_login_argv(kind, which=ctx.agents.which)
+                    return build_launch_argv(kind, spec.args, which=ctx.agents.which)
+
+                return build
+
+            backends += [VteTerminalBackend(kind, argv_for(kind)) for kind in SELECTABLE_AGENTS]
+        for backend in backends:
+            ctx.sessions.register_backend(backend)
+        self.terminal_backends = backends
 
     def _load_css(self) -> None:
         provider = Gtk.CssProvider()

@@ -136,6 +136,7 @@ class MainWindow(Adw.ApplicationWindow):
             ("toggle-sidebar", lambda *_: self._toggle_sidebar(), ["F9"]),
             ("new-prompt", lambda *_: self._new_prompt(), ["<Control>n"]),
             ("new-terminal", lambda *_: self._new_terminal(), ["<Control><Shift>t"]),
+            ("toggle-context", lambda *_: self._toggle_context(), ["<Shift>F9"]),
         ):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", handler)
@@ -148,6 +149,11 @@ class MainWindow(Adw.ApplicationWindow):
     def _hide_overlay_sidebar(self) -> None:
         if self._split.get_collapsed():
             self._split.set_show_sidebar(False)
+
+    def _toggle_context(self) -> None:
+        project_id = self.ctx.workspace.active_project_id
+        if project_id is not None and project_id in self._workspaces:
+            self._workspaces[project_id].toggle_context()
 
     def _new_terminal(self) -> None:
         project_id = self.ctx.workspace.active_project_id

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from gi.repository import Adw, Gtk
 
+from ia_workspace.agents.tools import describe_install
 from ia_workspace.context import AppContext
-from ia_workspace.services.integrations import detect_tools
 from ia_workspace.ui import widgets as w
 
 SCHEME_KEY = "appearance.scheme"
@@ -66,6 +66,10 @@ class PreferencesDialog(Adw.PreferencesDialog):
 
     def _integrations_page(self) -> Adw.PreferencesPage:
         page = Adw.PreferencesPage(title="Integraciones", icon_name="network-wired-symbolic")
+        check = Gtk.Button(label="Comprobar", valign=Gtk.Align.CENTER)
+        check.add_css_class("flat")
+        check.set_tooltip_text("Consultar instalación y sesión con los comandos oficiales de cada herramienta")
+        check.connect("clicked", lambda _b: self._check_tools())
         tools = Adw.PreferencesGroup(
             title="Herramientas oficiales",
             description=(
@@ -73,19 +77,48 @@ class PreferencesDialog(Adw.PreferencesDialog):
                 "IA Workspace no pide claves API, no guarda credenciales ni tokens y no genera "
                 "facturación adicional."
             ),
+            header_suffix=check,
         )
-        for status in detect_tools():
-            row = Adw.ActionRow(
-                title=status.kind.label,
-                subtitle=status.executable or "No encontrado en el PATH",
-                subtitle_selectable=status.installed,
-            )
+        self._tool_rows: dict = {}
+        for status in self.ctx.agents.statuses():
+            row = Adw.ActionRow(title=status.kind.label, subtitle_selectable=True)
             row.add_prefix(w.tool_chip(status.kind))
-            row.add_suffix(w.status_pill("Instalado", "done") if status.installed else w.status_pill("No detectado", "off"))
+            holder = Gtk.Box(valign=Gtk.Align.CENTER)
+            row.add_suffix(holder)
+            self._tool_rows[status.kind] = (row, holder)
             tools.add(row)
         chatgpt = Adw.ActionRow(title="ChatGPT", subtitle="Se usa en tu navegador con tu propia sesión")
         chatgpt.add_prefix(w.tool_chip("gpt", "GPT", "ChatGPT"))
         chatgpt.add_suffix(w.status_pill("Navegador", "idle"))
         tools.add(chatgpt)
         page.add(tools)
+
+        note = Adw.PreferencesGroup(
+            description=(
+                "Google Antigravity se integra mediante su CLI oficial «agy», que gestiona el inicio "
+                "de sesión dentro de la propia sesión. Si solo tienes la aplicación gráfica, "
+                "ábrela por separado: IA Workspace no la controla."
+            )
+        )
+        page.add(note)
+        self._unsubscribe = self.ctx.agents.subscribe(lambda _k: self._render_tools())
+        self.connect("closed", lambda _d: self._unsubscribe())
+        self._render_tools()
         return page
+
+    def _check_tools(self) -> None:
+        self.ctx.agents.detect()
+        for status in self.ctx.agents.statuses():
+            if status.installed:
+                self.ctx.agents.refresh(status.kind)
+
+    def _render_tools(self) -> None:
+        styles = {"Sesión iniciada": "done", "Requiere iniciar sesión": "wait", "No instalado": "off"}
+        for status in self.ctx.agents.statuses():
+            row, holder = self._tool_rows[status.kind]
+            note = describe_install(status.kind, status.executable)
+            subtitle = status.executable or status.tool.install_hint
+            row.set_subtitle(f"{subtitle}\n{note}" if note else subtitle)
+            w.clear_box(holder)
+            holder.append(w.status_pill(status.summary, styles.get(status.summary, "idle"),
+                                        spinning=status.checking))
