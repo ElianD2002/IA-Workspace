@@ -109,6 +109,30 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         """,
         "CREATE INDEX brain_documents_scope ON brain_documents(scope, project_key, category)",
     ),
+    # 5 — Memorias de proyectos quitados del registro. Al quitar un proyecto se guarda aquí
+    #     qué memoria tenía, su carpeta canónica y referencias de identidad de la carpeta
+    #     (dispositivo, inodo, si era un repositorio Git). Solo se ofrece recuperarla al volver
+    #     a registrar esa misma ruta y siempre con confirmación. Las filas recuperadas se
+    #     conservan como historial; como mucho una fila pendiente por memoria.
+    (
+        """
+        CREATE TABLE retired_memories (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            memory_key           TEXT    NOT NULL,
+            project_name         TEXT    NOT NULL,
+            path                 TEXT    NOT NULL,
+            device               INTEGER,
+            inode                INTEGER,
+            is_git               INTEGER,
+            registered_at        TEXT,
+            retired_at           TEXT    NOT NULL,
+            recovered_at         TEXT,
+            recovered_project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL
+        )
+        """,
+        "CREATE UNIQUE INDEX retired_memories_pending ON retired_memories(memory_key) WHERE recovered_at IS NULL",
+        "CREATE INDEX retired_memories_path ON retired_memories(path)",
+    ),
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

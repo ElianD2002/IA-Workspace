@@ -374,16 +374,44 @@ brain/                                   <datos>/brain  (XDG instalada · var/br
 - La CLI hace cumplir el aislamiento por la carpeta actual, pero un agente que ejecuta con
   los permisos del usuario podría leer los archivos de `brain/` directamente: el
   aislamiento fuerte requiere un sandbox del agente (fuera de esta fase).
-- Quitar un proyecto del registro conserva su carpeta de memoria (no se borran datos), pero
-  ya no está asociada a ningún proyecto: si se vuelve a registrar, recibe una memoria nueva.
-  Nunca se reasocia por nombre ni por id (los ids no se reutilizan: `AUTOINCREMENT` y
-  `ON DELETE CASCADE`). La recuperación explícita queda pendiente de autorización porque
-  requiere una migración nueva.
+- Quitar un proyecto del registro conserva su carpeta de memoria (no se borran datos);
+  recuperarla al volver a agregar la carpeta se describe en la fase 3A.1.
 - Desde el código la memoria vive en `var/brain/` y una instalación usaría
   `$XDG_DATA_HOME/ia-workspace/brain/`: son independientes y no se migran ni se fusionan
   automáticamente. `scripts/iaw-brain` siempre consulta los datos de su propia copia.
 - Sin resúmenes automáticos, actualización autónoma, Notion ni inyección de contexto:
   la instrucción para agentes se copia a mano.
+
+### Recuperación de memorias (fase 3A.1)
+
+- **Al quitar** un proyecto que tenía memoria, `ProjectRepository.remove` guarda en
+  `retired_memories` (migración 5), en la misma transacción que borra el proyecto, su
+  identificador de memoria, nombre, ruta canónica, fecha de registro y de baja, y referencias
+  de identidad de la carpeta (`services/detection.folder_identity`: dispositivo, inodo y si
+  es un repositorio Git). La asociación de `brain_projects` se borra en cascada; los
+  Markdown no se tocan. Los proyectos quitados no aparecen como activos en ningún lugar.
+- **Al volver a agregar** una carpeta, `BrainService.recoverable_memories(ruta)` busca
+  memorias pendientes con esa ruta canónica exacta —nunca por nombre— cuya carpeta siga en
+  disco y no esté en uso. El diálogo «Agregar proyecto» obliga a elegir entre «Recuperar
+  memoria anterior» y «Comenzar con memoria nueva» antes de habilitar **Agregar**.
+- **Avisos que exigen confirmación**: la carpeta tiene la misma ruta pero otro
+  dispositivo/inodo (se reemplazó o se restauró), cambió de ser o no un repositorio Git, no
+  había referencias al quitarla, o hay varias memorias pendientes para la misma ruta. Sin el
+  interruptor «Confirmo que es la misma carpeta», `recover_memory` se niega.
+- **Recuperar** (`ProjectService.register(..., prepare=...)`): la asociación se crea antes
+  de notificar a la interfaz; si falla, el registro se deshace. Se reutiliza el mismo
+  identificador y los mismos archivos (no se copian, mueven ni reescriben; solo se regenera
+  `INDEX.md`) y la fila queda como historial (`recovered_at`, `recovered_project_id`).
+  «Comenzar con memoria nueva» deja la anterior pendiente para más adelante.
+- Los identificadores nuevos nunca reutilizan una carpeta de memoria existente.
+
+### Limitaciones de la fase 3A.1
+
+- Las memorias que quedaron huérfanas antes de la migración 5 no tienen registro y no se
+  ofrecen (en esta instalación no había ninguna). Siguen en disco.
+- Si la carpeta del proyecto se mueve a otra ruta, no se detecta: la coincidencia es solo
+  por ruta canónica (el inodo solo sirve para avisar, nunca para asociar).
+- No hay todavía una pantalla para ver o descartar memorias retiradas.
 
 ## Persistencia
 
@@ -391,7 +419,8 @@ brain/                                   <datos>/brain  (XDG instalada · var/br
   registran en `PRAGMA user_version`. Una base de datos más nueva que el código se rechaza.
 - Tablas actuales: `projects`, `project_ui_state` (JSON del `WorkspaceState`), `settings`,
   `chat_links` (desde la migración 2), `prompt_transfers` (desde la migración 3) y
-  `brain_projects`/`brain_documents` (desde la migración 4; FTS5 `brain_fts` aparte).
+  `brain_projects`/`brain_documents` (desde la migración 4; FTS5 `brain_fts` aparte) y
+  `retired_memories` (desde la migración 5).
 - El estado visual se acumula en memoria (`mark_dirty`) y se escribe cada 5 s y al salir.
 
 ## Correspondencia con el prototipo (`docs/design/`)

@@ -97,6 +97,31 @@ class NewProject:
 
 
 @dataclass(frozen=True)
+class FolderIdentity:
+    """Referencias para reconocer una carpeta más allá de su ruta (``None`` si no existía)."""
+
+    device: int | None = None
+    inode: int | None = None
+    is_git: bool | None = None
+
+    @property
+    def known(self) -> bool:
+        return self.device is not None and self.inode is not None
+
+
+@dataclass(frozen=True)
+class RetiredMemory:
+    """Memoria de un proyecto quitado del registro, pendiente de recuperar."""
+
+    id: int
+    memory_key: str
+    project_name: str
+    path: str
+    identity: FolderIdentity
+    retired_at: datetime | None = None
+
+
+@dataclass(frozen=True)
 class ChatLink:
     """Conversación de ChatGPT vinculada a un proyecto (solo enlace y título)."""
 

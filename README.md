@@ -110,6 +110,11 @@ código, `var/brain/`); IA Workspace nunca escribe en tus repositorios ni modifi
 `AGENTS.md` o `CLAUDE.md`. Cada memoria tiene un `INDEX.md` ligero con una línea por
 documento.
 
+Quitar un proyecto del registro conserva su memoria. Si vuelves a agregar **la misma
+carpeta**, el diálogo te pide elegir entre recuperar la memoria anterior o empezar con una
+nueva; nunca se recupera por coincidir el nombre, y si la carpeta parece distinta (se
+reemplazó o se restauró de una copia) hay que confirmarlo expresamente.
+
 Los agentes no reciben la memoria: **Copiar instrucción** da una referencia breve al índice
 y a la consulta bajo demanda, que funciona desde la carpeta del proyecto:
 

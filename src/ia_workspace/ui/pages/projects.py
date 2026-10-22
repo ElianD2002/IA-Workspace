@@ -207,7 +207,8 @@ class ProjectsPage(Page):
             heading=f"¿Quitar «{project.name}» del registro?",
             body=(
                 "Se olvidará su estado en IA Workspace. La carpeta y sus archivos no se "
-                "modifican ni se borran."
+                "modifican ni se borran. Su memoria del Cerebro se conserva y podrás "
+                "recuperarla si vuelves a agregar esta misma carpeta."
             ),
         )
         dialog.add_response("cancel", "Cancelar")

@@ -6,7 +6,16 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 
-from ia_workspace.domain.models import AgentKind, ChatLink, NewProject, Project, PromptTransfer, WorkspaceState
+from ia_workspace.domain.models import (
+    AgentKind,
+    ChatLink,
+    FolderIdentity,
+    NewProject,
+    Project,
+    PromptTransfer,
+    RetiredMemory,
+    WorkspaceState,
+)
 from ia_workspace.persistence.database import Database
 
 
@@ -98,8 +107,19 @@ class ProjectRepository:
                 "UPDATE projects SET last_opened_at = ? WHERE id = ?", (_now(), project_id)
             )
 
-    def remove(self, project_id: int) -> None:
+    def remove(self, project_id: int, identity: FolderIdentity | None = None) -> None:
+        """Borra el proyecto. Si tenía memoria, la deja registrada como recuperable en la
+        misma transacción (la asociación de ``brain_projects`` se borra en cascada)."""
+        identity = identity or FolderIdentity()
+        is_git = None if identity.is_git is None else int(identity.is_git)
         with self._conn:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO retired_memories (memory_key, project_name, path, device, inode, is_git, "
+                "registered_at, retired_at) "
+                "SELECT b.memory_key, p.name, p.path, ?, ?, ?, p.created_at, ? "
+                "FROM brain_projects b JOIN projects p ON p.id = b.project_id WHERE p.id = ?",
+                (identity.device, identity.inode, is_git, _now(), project_id),
+            )
             self._conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
 
 
@@ -237,6 +257,49 @@ class BrainProjectRepository:
     def project_for_key(self, memory_key: str) -> int | None:
         row = self._conn.execute("SELECT project_id FROM brain_projects WHERE memory_key = ?", (memory_key,)).fetchone()
         return row["project_id"] if row else None
+
+    # ---- memorias de proyectos quitados ---------------------------------------------------
+
+    @staticmethod
+    def _retired(row: sqlite3.Row) -> RetiredMemory:
+        is_git = row["is_git"]
+        return RetiredMemory(
+            id=row["id"],
+            memory_key=row["memory_key"],
+            project_name=row["project_name"],
+            path=row["path"],
+            identity=FolderIdentity(row["device"], row["inode"], None if is_git is None else bool(is_git)),
+            retired_at=_parse_dt(row["retired_at"]),
+        )
+
+    def retired_for_path(self, path: str) -> list[RetiredMemory]:
+        """Memorias pendientes cuya carpeta canónica era exactamente ``path`` (la más reciente
+        primero). Nunca se busca por nombre."""
+        rows = self._conn.execute(
+            "SELECT * FROM retired_memories WHERE path = ? AND recovered_at IS NULL "
+            "AND memory_key NOT IN (SELECT memory_key FROM brain_projects) ORDER BY id DESC",
+            (path,),
+        ).fetchall()
+        return [self._retired(r) for r in rows]
+
+    def recover(self, retired_id: int, project_id: int) -> str:
+        """Asocia la memoria pendiente al proyecto y marca la fila como recuperada. Falla si la
+        memoria ya no está pendiente, si ya está en uso o si el proyecto ya tiene memoria."""
+        with self._conn:
+            row = self._conn.execute(
+                "SELECT memory_key FROM retired_memories WHERE id = ? AND recovered_at IS NULL", (retired_id,)
+            ).fetchone()
+            if row is None:
+                raise LookupError(retired_id)
+            self._conn.execute(
+                "INSERT INTO brain_projects (project_id, memory_key, created_at) VALUES (?, ?, ?)",
+                (project_id, row["memory_key"], _now()),
+            )
+            self._conn.execute(
+                "UPDATE retired_memories SET recovered_at = ?, recovered_project_id = ? WHERE id = ?",
+                (_now(), project_id, retired_id),
+            )
+        return row["memory_key"]
 
 
 class WorkspaceStateRepository:

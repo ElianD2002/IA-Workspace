@@ -233,6 +233,70 @@ class BrainScreenTest(unittest.TestCase):
                     win.open_project(a.id)
                     check("1 documento" in view_a._memory_hint.get_label(), view_a._memory_hint.get_label())
 
+                    # Fase 3A.1: quitar un proyecto y recuperar su memoria al volver a agregarlo.
+                    from ia_workspace.ui.dialogs.add_project import AddProjectDialog
+
+                    gamma_dir = Path(folders) / "gamma"
+                    gamma_dir.mkdir()
+                    g = ctx.projects.register("Gamma", str(gamma_dir), ())
+                    key_g = ctx.brain.project_key(g)
+                    ctx.brain.create(Scope.PROJECT, key_g, "estado", "Estado de Gamma", "Migración en curso.")
+                    ctx.projects.unregister(g.id)
+                    pump(timeout=0.1)
+                    check(g.id not in [p.id for p in ctx.projects.list()], "Gamma sigue como proyecto activo")
+
+                    added: list[int] = []
+
+                    def add_dialog(folder: Path) -> AddProjectDialog:
+                        dialog = AddProjectDialog(ctx, on_added=added.append)
+                        dialog.present(win)
+                        dialog.set_folder(str(folder))
+                        pump(timeout=0.1)
+                        return dialog
+
+                    plain_dir = Path(folders) / "sin-historial"
+                    plain_dir.mkdir()
+                    dialog = add_dialog(plain_dir)
+                    check(not dialog._memory_group.get_visible(), "ofreció memoria a una carpeta sin historial")
+                    check(dialog._add.get_sensitive(), "no se puede agregar una carpeta sin historial")
+                    dialog.force_close()
+
+                    dialog = add_dialog(gamma_dir)
+                    check(dialog._memory_group.get_visible() and len(dialog.recover_checks) == 1,
+                          "no detectó la memoria anterior")
+                    check(not dialog._add.get_sensitive(), "permite agregar sin elegir qué hacer con la memoria")
+                    dialog.fresh_check.set_active(True)
+                    check(dialog._add.get_sensitive(), "«Comenzar con memoria nueva» no habilita Agregar")
+                    [recover_check] = dialog.recover_checks.values()
+                    recover_check.set_active(True)
+                    check(dialog._add.get_sensitive() and not dialog.confirm_row.get_visible(),
+                          "una memoria sin avisos no debería pedir confirmación adicional")
+                    dialog._submit()
+                    pump(timeout=0.2)
+                    check(len(added) == 1 and ctx.brain.existing_project_key(added[0]) == key_g,
+                          "no se recuperó la memoria de Gamma")
+                    check(len(list((ctx.brain.root / "projects" / key_g).rglob("*.md"))) == 2,
+                          "la recuperación duplicó documentos")  # el documento + INDEX.md
+                    page.select_project(added[0])
+                    check(page._category_counts["estado"].get_label() == "1", "el Cerebro no muestra la memoria recuperada")
+
+                    # Carpeta reemplazada en la misma ruta: aviso y confirmación obligatoria.
+                    ctx.projects.unregister(added[0])
+                    gamma_dir.rename(Path(folders) / "gamma-vieja")
+                    gamma_dir.mkdir()
+                    dialog = add_dialog(gamma_dir)
+                    [recover_check] = dialog.recover_checks.values()
+                    recover_check.set_active(True)
+                    check(dialog.memory_warning.get_visible() and "no es la misma" in dialog.memory_warning.get_label(),
+                          f"falta el aviso: {dialog.memory_warning.get_label()!r}")
+                    check(not dialog._add.get_sensitive(), "recupera una memoria dudosa sin confirmación")
+                    dialog.confirm_row.set_active(True)
+                    check(dialog._add.get_sensitive(), "la confirmación no habilita Agregar")
+                    dialog._submit()
+                    pump(timeout=0.2)
+                    check(len(added) == 2 and ctx.brain.existing_project_key(added[1]) == key_g,
+                          "no se recuperó tras confirmar")
+
                     # Las sesiones siguen intactas.
                     before = ticks()
                     check(pump(lambda: ticks() > before + 5, 5), "la terminal dejó de avanzar")

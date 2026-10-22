@@ -32,6 +32,7 @@ from ia_workspace.domain.models import NewProject
 from ia_workspace.persistence.brain_index import BrainIndex
 from ia_workspace.persistence.database import MIGRATIONS, SCHEMA_VERSION, Database
 from ia_workspace.persistence.repositories import ProjectRepository
+from ia_workspace.services.projects import ProjectService
 
 
 class BrainCase(unittest.TestCase):
@@ -399,6 +400,181 @@ class AgentInterfaceTests(BrainCase):
         self.assertIn("preferencias/idioma.md · Idioma", result.stdout)
 
 
+class RecoveryTests(unittest.TestCase):
+    """Fase 3A.1: memoria de proyectos quitados del registro."""
+
+    def setUp(self) -> None:
+        self.tmp = temp_dir()
+        self.data = Path(self.tmp.name)
+        self.open()
+
+    def open(self) -> None:
+        self.db = Database(self.data / "ia-workspace.db")
+        self.projects = ProjectService(ProjectRepository(self.db))
+        self.brain = build_brain(self.db, AppPaths(self.data))
+
+    def reopen(self) -> None:  # como reiniciar la aplicación
+        self.db.close()
+        self.open()
+
+    def tearDown(self) -> None:
+        self.db.close()
+        self.tmp.cleanup()
+
+    def folder(self, name: str) -> str:
+        path = self.data / "carpetas" / name
+        path.mkdir(parents=True, exist_ok=True)
+        return str(path)
+
+    def with_memory(self, name: str, folder: str, *titles: str):
+        project = self.projects.register(name, folder, ())
+        key = self.brain.project_key(project)
+        for title in titles:
+            self.brain.create(Scope.PROJECT, key, "decisiones", title, f"Contenido de {title}.")
+        return project, key
+
+    def markdown(self, key: str) -> dict[str, bytes]:
+        root = self.brain.root / "projects" / key
+        return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*.md") if p.name != "INDEX.md"}
+
+    def recover(self, name: str, folder: str, retired_id: int, confirmed: bool = False):
+        return self.projects.register(name, folder, (), prepare=lambda p: self.brain.recover_memory(
+            p, retired_id, confirmed))
+
+    def test_remove_and_recover_reuses_the_same_documents(self) -> None:
+        folder = self.folder("alfa")
+        project, key = self.with_memory("Alfa", folder, "Fechas en UTC", "Capas")
+        before = self.markdown(key)
+        self.projects.unregister(project.id)
+        self.assertEqual(self.markdown(key), before, "quitar el proyecto alteró la memoria")
+        self.assertIsNone(self.brain.existing_project_key(project.id))
+
+        [memory] = self.brain.recoverable_memories(folder)
+        self.assertEqual((memory.retired.memory_key, memory.retired.project_name, memory.documents, memory.warnings),
+                         (key, "Alfa", 2, ()))
+        again = self.recover("Alfa renombrado", folder, memory.id)
+        self.assertNotEqual(again.id, project.id)
+        self.assertEqual(self.brain.existing_project_key(again.id), key)
+        self.assertEqual(self.markdown(key), before, "la recuperación reescribió o duplicó documentos")
+        self.assertEqual(sorted(p.name for p in (self.brain.root / "projects").iterdir()), [key])
+        self.assertEqual([d.title for d in self.brain.list(Scope.PROJECT, key)], ["Capas", "Fechas en UTC"])
+        self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM brain_documents WHERE project_key = ?",
+                                              (key,)).fetchone()[0], 2)
+        self.assertIn("«Alfa renombrado»", self.brain.index_path(Scope.PROJECT, key).read_text(encoding="utf-8"))
+        self.assertEqual(self.brain.recoverable_memories(folder), [], "una memoria recuperada sigue pendiente")
+
+    def test_detection_and_recovery_survive_a_restart(self) -> None:
+        folder = self.folder("alfa")
+        project, key = self.with_memory("Alfa", folder, "Nota")
+        self.projects.unregister(project.id)
+        self.reopen()
+        self.assertEqual(self.projects.list(), [], "un proyecto quitado aparece como activo")
+        [memory] = self.brain.recoverable_memories(folder)
+        again = self.recover("Alfa", folder, memory.id)
+        self.reopen()
+        self.assertEqual(self.brain.existing_project_key(again.id), key)
+        self.assertEqual(self.brain.read(Scope.PROJECT, key, "decisiones/nota.md").body, "Contenido de Nota.\n")
+        history = self.db.conn.execute("SELECT recovered_project_id, recovered_at FROM retired_memories").fetchall()
+        self.assertEqual([(r[0], bool(r[1])) for r in history], [(again.id, True)], "no queda historial")
+
+    def test_starting_fresh_keeps_the_old_memory_recoverable(self) -> None:
+        folder = self.folder("alfa")
+        project, old_key = self.with_memory("Alfa", folder, "Antigua")
+        self.projects.unregister(project.id)
+        fresh = self.projects.register("Alfa", folder, ())
+        new_key = self.brain.project_key(fresh)
+        self.assertNotEqual(new_key, old_key)
+        self.assertEqual(self.brain.list(Scope.PROJECT, new_key), [])
+        self.assertEqual([m.retired.memory_key for m in self.brain.recoverable_memories(folder)], [old_key])
+        self.assertTrue(self.markdown(old_key))
+
+    def test_never_matches_by_name(self) -> None:
+        project, _ = self.with_memory("Alfa", self.folder("alfa"), "Nota")
+        self.projects.unregister(project.id)
+        other = self.folder("otra/alfa")  # mismo nombre de proyecto y de carpeta, otra ruta
+        self.assertEqual(self.brain.recoverable_memories(other), [])
+
+    def test_identical_names_stay_separate(self) -> None:
+        one, two = self.folder("uno/web"), self.folder("dos/web")
+        p1, k1 = self.with_memory("Web", one, "De uno")
+        p2, k2 = self.with_memory("Web", two, "De dos")
+        self.projects.unregister(p1.id)
+        self.projects.unregister(p2.id)
+        [m1] = self.brain.recoverable_memories(one)
+        [m2] = self.brain.recoverable_memories(two)
+        self.assertEqual((m1.retired.memory_key, m2.retired.memory_key), (k1, k2))
+        with self.assertRaises(BrainError):
+            self.recover("Web", one, m2.id)  # la memoria de la otra carpeta
+        self.assertEqual([p.path for p in self.projects.list()], [], "el registro fallido no se deshizo")
+        again = self.recover("Web", one, m1.id)
+        self.assertEqual(self.brain.existing_project_key(again.id), k1)
+        self.assertEqual([d.title for d in self.brain.list(Scope.PROJECT, k1)], ["De uno"])
+
+    def test_cross_association_is_rejected(self) -> None:
+        a_folder, b_folder = self.folder("alfa"), self.folder("beta")
+        a, ka = self.with_memory("Alfa", a_folder, "Secreto de Alfa")
+        self.projects.unregister(a.id)
+        [memory] = self.brain.recoverable_memories(a_folder)
+        b, kb = self.with_memory("Beta", b_folder, "De Beta")
+        with self.assertRaises(BrainError):
+            self.brain.recover_memory(b, memory.id)  # otra carpeta
+        fresh = self.projects.register("Alfa", a_folder, ())
+        self.brain.project_key(fresh)
+        with self.assertRaises(BrainError):
+            self.brain.recover_memory(fresh, memory.id)  # ya tiene memoria propia
+        self.assertEqual(self.brain.existing_project_key(b.id), kb)
+        self.assertNotEqual(self.brain.existing_project_key(fresh.id), ka)
+        self.assertEqual(len(self.brain.recoverable_memories(a_folder)), 1, "la memoria dejó de estar pendiente")
+
+    def test_replaced_folder_requires_confirmation(self) -> None:
+        folder = self.folder("alfa")
+        project, key = self.with_memory("Alfa", folder, "Nota")
+        self.projects.unregister(project.id)
+        os.rename(folder, folder + ".viejo")
+        Path(folder).mkdir()
+        (Path(folder) / ".git").mkdir()
+        [memory] = self.brain.recoverable_memories(folder)
+        self.assertEqual(len(memory.warnings), 2, memory.warnings)  # otra carpeta y ahora es Git
+        with self.assertRaises(BrainError):
+            self.recover("Alfa", folder, memory.id)
+        self.assertEqual(self.projects.list(), [], "se registró sin confirmar")
+        self.assertIsNone(self.db.conn.execute("SELECT 1 FROM brain_projects").fetchone())
+        again = self.recover("Alfa", folder, memory.id, confirmed=True)
+        self.assertEqual(self.brain.existing_project_key(again.id), key)
+
+    def test_several_candidates_are_ambiguous(self) -> None:
+        folder = self.folder("alfa")
+        first, k1 = self.with_memory("Alfa", folder, "Primera")
+        self.projects.unregister(first.id)
+        second, k2 = self.with_memory("Alfa", folder, "Segunda")
+        self.projects.unregister(second.id)
+        memories = self.brain.recoverable_memories(folder)
+        self.assertEqual([m.retired.memory_key for m in memories], [k2, k1])  # la más reciente primero
+        self.assertTrue(all(m.warnings for m in memories))
+        with self.assertRaises(BrainError):
+            self.brain.recover_memory(self.projects.register("Alfa", folder, ()), memories[1].id)
+
+    def test_missing_memory_folder_is_not_offered(self) -> None:
+        folder = self.folder("alfa")
+        project, key = self.with_memory("Alfa", folder, "Nota")
+        self.projects.unregister(project.id)
+        os.rename(self.brain.root / "projects" / key, self.data / "fuera")
+        self.assertEqual(self.brain.recoverable_memories(folder), [])
+
+    def test_projects_without_memory_leave_no_record(self) -> None:
+        project = self.projects.register("Sin memoria", self.folder("vacio"), ())
+        self.projects.unregister(project.id)
+        self.assertEqual(self.db.conn.execute("SELECT COUNT(*) FROM retired_memories").fetchone()[0], 0)
+
+    def test_new_keys_never_reuse_an_existing_memory_folder(self) -> None:
+        project, key = self.with_memory("Alfa", self.folder("alfa"), "Nota")
+        self.projects.unregister(project.id)
+        fresh = self.projects.register("Alfa", self.folder("alfa"), ())
+        suffix = key.rsplit("-", 1)[1]
+        with mock.patch("ia_workspace.brain.service.secrets.token_hex", side_effect=[suffix, "0" * 12]):
+            self.assertEqual(self.brain.project_key(fresh), "alfa-" + "0" * 12)
+
+
 class MigrationV4Tests(unittest.TestCase):
     def test_v3_database_upgrades_without_losing_data(self) -> None:
         with temp_dir() as tmp:
@@ -421,9 +597,29 @@ class MigrationV4Tests(unittest.TestCase):
             self.assertEqual(db.conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             db.close()
 
+    def test_v4_database_keeps_its_memories(self) -> None:
+        with temp_dir() as tmp:
+            path = Path(tmp) / "v4.db"
+            conn = sqlite3.connect(path)
+            for migration in MIGRATIONS[:4]:
+                for statement in migration:
+                    conn.execute(statement)
+            conn.execute("PRAGMA user_version = 4")
+            conn.execute("INSERT INTO projects (name, path, color_index, agents, created_at) "
+                         "VALUES ('Existente', '/existente', 0, '[]', '2026-10-01T10:00:00+00:00')")
+            conn.execute("INSERT INTO brain_projects VALUES (1, 'existente-0123456789ab', '2026-10-01T10:00:00+00:00')")
+            conn.commit()
+            conn.close()
+            db = Database(path)
+            self.assertEqual(db.version, SCHEMA_VERSION)
+            self.assertEqual(db.conn.execute("SELECT memory_key FROM brain_projects").fetchone()[0],
+                             "existente-0123456789ab")
+            self.assertEqual(db.conn.execute("SELECT COUNT(*) FROM retired_memories").fetchone()[0], 0)
+            db.close()
+
     def test_no_credential_or_content_columns(self) -> None:
         db = Database(":memory:")
-        for table in ("brain_projects", "brain_documents"):
+        for table in ("brain_projects", "brain_documents", "retired_memories"):
             columns = [c[1].lower() for c in db.conn.execute(f"PRAGMA table_info({table})")]
             self.assertFalse([c for c in columns if any(f in c for f in ("token", "secret", "password", "body"))])
 

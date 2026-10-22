@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ia_workspace.domain.models import AgentKind, NewProject, Project
 from ia_workspace.persistence.repositories import DuplicateProjectError, ProjectRepository
+from ia_workspace.services.detection import folder_identity
 
 
 class ProjectValidationError(ValueError):
@@ -44,7 +45,16 @@ class ProjectService:
     def get(self, project_id: int) -> Project | None:
         return self._repo.get(project_id)
 
-    def register(self, name: str, path: str, agents: tuple[AgentKind, ...]) -> Project:
+    def register(
+        self,
+        name: str,
+        path: str,
+        agents: tuple[AgentKind, ...],
+        prepare: Callable[[Project], None] | None = None,
+    ) -> Project:
+        """Registra la carpeta. ``prepare`` se ejecuta con el proyecto recién creado antes de
+        notificar a nadie (p. ej. recuperar su memoria anterior); si falla, el registro se
+        deshace y la excepción se propaga."""
         name = name.strip()
         if not name:
             raise ProjectValidationError("Escribe un nombre para el proyecto.")
@@ -62,6 +72,12 @@ class ProjectService:
             existing = self._repo.get_by_path(normalized)
             label = f"«{existing.name}»" if existing else "otro proyecto"
             raise ProjectValidationError(f"Esta carpeta ya está registrada como {label}.") from exc
+        if prepare is not None:
+            try:
+                prepare(project)
+            except BaseException:
+                self._repo.remove(project.id)
+                raise
         self._emit()
         return project
 
@@ -76,6 +92,9 @@ class ProjectService:
         self._emit()
 
     def unregister(self, project_id: int) -> None:
-        """Quita el proyecto del registro. No toca los archivos de la carpeta."""
-        self._repo.remove(project_id)
+        """Quita el proyecto del registro. No toca los archivos de la carpeta. Si tenía memoria
+        en el Cerebro, se conserva como recuperable junto con referencias de su carpeta."""
+        project = self._repo.get(project_id)
+        identity = folder_identity(project.path) if project is not None else None
+        self._repo.remove(project_id, identity)
         self._emit()

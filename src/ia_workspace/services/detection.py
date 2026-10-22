@@ -10,6 +10,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ia_workspace.domain.models import FolderIdentity
+
 CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md", "GEMINI.md")
 
 
@@ -96,6 +98,18 @@ def detect_stack(root: Path) -> tuple[str, ...]:
     if (root / "pom.xml").is_file() or (root / "build.gradle").is_file():
         stack.append("Java")
     return tuple(dict.fromkeys(stack))
+
+
+def folder_identity(path: str | Path) -> FolderIdentity:
+    """Dispositivo, inodo y si es un repositorio Git; vacío si la carpeta ya no existe."""
+    root = Path(path)
+    try:
+        info = root.stat()
+    except OSError:
+        return FolderIdentity()
+    if not root.is_dir():
+        return FolderIdentity()
+    return FolderIdentity(device=info.st_dev, inode=info.st_ino, is_git=(root / ".git").exists())
 
 
 def inspect_folder(path: str | Path) -> FolderInfo:

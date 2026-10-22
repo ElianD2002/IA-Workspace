@@ -19,10 +19,12 @@ La memoria global es común y solo contiene preferencias generales del usuario.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import secrets
+import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -42,9 +44,10 @@ from ia_workspace.brain.model import (
     validate_document,
 )
 from ia_workspace.brain.store import BrainStore
-from ia_workspace.domain.models import Project
+from ia_workspace.domain.models import FolderIdentity, Project, RetiredMemory
 from ia_workspace.persistence.brain_index import BrainIndex, normalize, query_terms
 from ia_workspace.persistence.repositories import BrainProjectRepository
+from ia_workspace.services.detection import folder_identity
 
 DEFAULT_SEARCH_LIMIT = 8
 MAX_SEARCH_LIMIT = 25
@@ -98,6 +101,32 @@ def excerpt(body: str, terms: list[str], radius: int = EXCERPT_RADIUS) -> str:
     return ("…" if start > 0 else "") + snippet + ("…" if end < len(text) else "")
 
 
+@dataclass(frozen=True)
+class RecoverableMemory:
+    retired: RetiredMemory
+    documents: int
+    warnings: tuple[str, ...] = ()
+
+    @property
+    def id(self) -> int:
+        return self.retired.id
+
+
+def _identity_warnings(saved: FolderIdentity, current: FolderIdentity) -> tuple[str, ...]:
+    if not saved.known:
+        return ("No se pudo comprobar la identidad de la carpeta cuando se quitó el proyecto.",)
+    if not current.known:
+        return ("No se puede comprobar la identidad de la carpeta actual.",)
+    warnings = []
+    if (saved.device, saved.inode) != (current.device, current.inode):
+        warnings.append("La carpeta tiene la misma ruta pero no es la misma que se quitó "
+                        "(se reemplazó, se restauró de una copia o está en otro disco).")
+    if saved.is_git is not None and saved.is_git != current.is_git:
+        warnings.append("Antes era un repositorio Git y ahora no." if saved.is_git
+                        else "Antes no era un repositorio Git y ahora sí.")
+    return tuple(warnings)
+
+
 def _escape_link_text(text: str) -> str:
     return text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
 
@@ -142,11 +171,55 @@ class BrainService:
         existing = self._projects.key_for(project.id)
         if existing:
             return existing
-        candidate = f"{slugify(project.name, 40)}-{secrets.token_hex(6)}"
+        while True:  # nunca reutiliza la carpeta de otra memoria (activa, retirada o huérfana)
+            candidate = f"{slugify(project.name, 40)}-{secrets.token_hex(6)}"
+            if not os.path.lexists(self.store.scope_root(Scope.PROJECT, candidate)):
+                break
         return self._projects.assign(project.id, candidate)
 
     def existing_project_key(self, project_id: int) -> str | None:
         return self._projects.key_for(project_id)
+
+    # ---- recuperación de la memoria de un proyecto quitado ----------------------------------
+
+    def recoverable_memories(self, path: str) -> list[RecoverableMemory]:
+        """Memorias de proyectos quitados cuya carpeta canónica era exactamente ``path``.
+
+        Solo cuenta la ruta (nunca el nombre) y solo memorias cuya carpeta sigue en disco.
+        Las diferencias con las referencias guardadas o varias candidatas para la misma
+        ruta se devuelven como avisos: exigen confirmación antes de recuperar."""
+        current = folder_identity(path)
+        found: list[RecoverableMemory] = []
+        for retired in self._projects.retired_for_path(path):
+            try:
+                root = self.store.scope_root(Scope.PROJECT, retired.memory_key)
+            except BrainError:
+                continue
+            if root.is_symlink() or not root.is_dir():
+                continue
+            documents = sum(1 for _ in self.store.iter_documents(Scope.PROJECT, retired.memory_key))
+            found.append(RecoverableMemory(retired, documents, _identity_warnings(retired.identity, current)))
+        if len(found) > 1:
+            note = f"Hay {len(found)} memorias anteriores para esta carpeta: comprueba cuál es la correcta."
+            found = [replace(m, warnings=(*m.warnings, note)) for m in found]
+        return found
+
+    def recover_memory(self, project: Project, retired_id: int, confirmed: bool = False) -> str:
+        """Asocia al proyecto la memoria anterior elegida y reutiliza su identificador y sus
+        documentos tal cual (no copia, mueve ni reescribe ningún Markdown)."""
+        candidate = next((m for m in self.recoverable_memories(project.path) if m.id == retired_id), None)
+        if candidate is None:
+            raise BrainError("Esa memoria no pertenece a esta carpeta o ya no se puede recuperar.")
+        if candidate.warnings and not confirmed:
+            raise BrainError("Confirma la recuperación: " + " ".join(candidate.warnings))
+        if self._projects.key_for(project.id):
+            raise BrainError("Este proyecto ya tiene su propia memoria.")
+        try:
+            key = self._projects.recover(retired_id, project.id)
+        except (LookupError, sqlite3.IntegrityError) as exc:
+            raise BrainError("Esa memoria ya no se puede recuperar.") from exc
+        self.sync(Scope.PROJECT, key)  # solo regenera INDEX.md (p. ej. con el nombre nuevo)
+        return key
 
     def index_path(self, scope: Scope, project_key: str = "") -> Path:
         return self.store.scope_root(scope, project_key) / INDEX_FILENAME

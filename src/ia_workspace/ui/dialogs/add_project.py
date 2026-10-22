@@ -7,6 +7,7 @@ from pathlib import Path
 
 from gi.repository import Adw, Gio, GLib, Gtk
 
+from ia_workspace.brain.model import BrainError
 from ia_workspace.context import AppContext
 from ia_workspace.domain.models import SELECTABLE_AGENTS
 from ia_workspace.services.detection import inspect_folder
@@ -42,6 +43,31 @@ class AddProjectDialog(Adw.Dialog):
         self._folder_row.add_suffix(choose)
         folder_group.add(self._folder_row)
         page.add(folder_group)
+
+        # Memoria de un proyecto quitado que tenía esta misma carpeta: la decisión es explícita.
+        self._memory_group = Adw.PreferencesGroup(
+            title="Memoria anterior de esta carpeta",
+            description="Esta carpeta perteneció a un proyecto que se quitó del registro. Su memoria del "
+            "Cerebro se conservó: elige qué hacer. Nada se recupera sin tu elección.",
+            visible=False,
+        )
+        page.add(self._memory_group)
+        self._memory_rows: list[Gtk.Widget] = []
+        self.recover_checks: dict[int, Gtk.CheckButton] = {}
+        self.fresh_check: Gtk.CheckButton | None = None
+        self._candidates: dict = {}
+        self.memory_warning = Gtk.Label(wrap=True, visible=False, xalign=0, margin_start=12, margin_end=12,
+                                        margin_top=10, margin_bottom=10)
+        self.memory_warning.add_css_class("warning")
+        self.confirm_row = Adw.SwitchRow(
+            title="Confirmo que es la misma carpeta", subtitle="Necesario para recuperar una memoria con avisos",
+            visible=False,
+        )
+        self.confirm_row.connect("notify::active", lambda *_: self._update_sensitivity())
+        self._confirm_group = Adw.PreferencesGroup(visible=False)
+        self._confirm_group.add(Adw.PreferencesRow(activatable=False, child=self.memory_warning))
+        self._confirm_group.add(self.confirm_row)
+        page.add(self._confirm_group)
 
         name_group = Adw.PreferencesGroup()
         self._name = Adw.EntryRow(title="Nombre", activates_default=True)
@@ -126,6 +152,70 @@ class AddProjectDialog(Adw.Dialog):
         )
         self._detected.set_visible(True)
         self._error.set_visible(False)
+        self._show_recoverable(self.ctx.projects.normalize_path(path))
+        self._update_sensitivity()
+
+    # ---- memoria anterior -----------------------------------------------------------
+
+    def _show_recoverable(self, path: str) -> None:
+        for row in self._memory_rows:
+            self._memory_group.remove(row)
+        self._memory_rows, self.recover_checks, self.fresh_check = [], {}, None
+        brain = self.ctx.brain
+        candidates = brain.recoverable_memories(path) if brain is not None else []
+        self._candidates = {m.id: m for m in candidates}
+        self.confirm_row.set_active(False)
+        if not candidates:
+            self._memory_group.set_visible(False)
+            self._confirm_group.set_visible(False)
+            return
+        group_leader = None
+        for memory in candidates:
+            retired = memory.retired
+            date = retired.retired_at.astimezone().strftime("%d/%m/%Y") if retired.retired_at else "fecha desconocida"
+            plural = "documento" if memory.documents == 1 else "documentos"
+            title = "Recuperar memoria anterior" if len(candidates) == 1 else f"Recuperar la memoria de «{retired.project_name}»"
+            check = Gtk.CheckButton(group=group_leader, valign=Gtk.Align.CENTER)
+            group_leader = group_leader or check
+            row = Adw.ActionRow(
+                title=GLib.markup_escape_text(title),
+                subtitle=GLib.markup_escape_text(
+                    f"Proyecto «{retired.project_name}» · {memory.documents} {plural} · quitado el {date}"
+                    + (" · requiere confirmación" if memory.warnings else "")
+                ),
+                activatable_widget=check,
+                subtitle_lines=2,
+            )
+            row.add_prefix(check)
+            check.connect("toggled", lambda *_: self._on_memory_choice())
+            self.recover_checks[memory.id] = check
+            self._memory_rows.append(row)
+        self.fresh_check = Gtk.CheckButton(group=group_leader, valign=Gtk.Align.CENTER)
+        self.fresh_check.connect("toggled", lambda *_: self._on_memory_choice())
+        fresh = Adw.ActionRow(
+            title="Comenzar con memoria nueva",
+            subtitle="La memoria anterior se conserva intacta y podrá recuperarse más adelante.",
+            activatable_widget=self.fresh_check,
+        )
+        fresh.add_prefix(self.fresh_check)
+        self._memory_rows.append(fresh)
+        for row in self._memory_rows:
+            self._memory_group.add(row)
+        self._on_memory_choice()
+        self._memory_group.set_visible(True)
+
+    def _chosen_memory(self):
+        return next((self._candidates[i] for i, c in self.recover_checks.items() if c.get_active()), None)
+
+    def _on_memory_choice(self) -> None:
+        chosen = self._chosen_memory()
+        warnings = chosen.warnings if chosen is not None else ()
+        self.memory_warning.set_label("\n".join(warnings))
+        self.memory_warning.set_visible(bool(warnings))
+        self.confirm_row.set_visible(bool(warnings))
+        self._confirm_group.set_visible(bool(warnings))
+        if not warnings:
+            self.confirm_row.set_active(False)
         self._update_sensitivity()
 
     def _on_name_changed(self, _entry: Adw.EntryRow) -> None:
@@ -133,16 +223,34 @@ class AddProjectDialog(Adw.Dialog):
             self._name_edited = True
         self._update_sensitivity()
 
+    def _memory_decided(self) -> bool:
+        if not self._candidates:
+            return True
+        chosen = self._chosen_memory()
+        if chosen is None:
+            return self.fresh_check is not None and self.fresh_check.get_active()
+        return not chosen.warnings or self.confirm_row.get_active()
+
     def _update_sensitivity(self) -> None:
-        self._add.set_sensitive(bool(self._path and self._name.get_text().strip()))
+        self._add.set_sensitive(bool(self._path and self._name.get_text().strip() and self._memory_decided()))
 
     # ---- registro ----------------------------------------------------------------
 
     def _submit(self) -> None:
+        if not self._add.get_sensitive():
+            return
         agents = tuple(kind for kind, row in self._agent_rows.items() if row.get_active())
+        chosen, prepare = self._chosen_memory(), None
+        if chosen is not None and self.ctx.brain is not None:
+            confirmed = self.confirm_row.get_active()
+            brain = self.ctx.brain
+
+            def prepare(project) -> None:
+                brain.recover_memory(project, chosen.id, confirmed)
+
         try:
-            project = self.ctx.projects.register(self._name.get_text(), self._path, agents)
-        except ProjectValidationError as exc:
+            project = self.ctx.projects.register(self._name.get_text(), self._path, agents, prepare=prepare)
+        except (ProjectValidationError, BrainError) as exc:
             self._error.set_label(str(exc))
             self._error.set_visible(True)
             return
