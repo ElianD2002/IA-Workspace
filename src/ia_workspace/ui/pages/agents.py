@@ -89,6 +89,15 @@ class AgentsPage(Page):
 
         self._sessions_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
 
+        from ia_workspace.ui.quota_panel import SubscriptionQuotasSection
+
+        self._updating_quota_kinds: set[AgentKind] = set()
+        self._quotas_section = SubscriptionQuotasSection(
+            ctx=self.ctx,
+            on_refresh_requested=self._on_refresh_quotas_requested,
+        )
+
+        self._body.append(self._quotas_section)
         self._body.append(self._autonomy_group)
         self._body.append(self._sessions_box)
 
@@ -105,6 +114,7 @@ class AgentsPage(Page):
         self.set_content(self._stack)
 
     def refresh(self) -> None:
+        self._render_quotas()
         projects = self.ctx.projects.list()
         if not projects:
             self._project = None
@@ -135,6 +145,56 @@ class AgentsPage(Page):
 
         self._render_autonomy()
         self._render_sessions()
+
+    def _render_quotas(self) -> None:
+        if not getattr(self.ctx, "quotas", None):
+            return
+        from pathlib import Path
+        snapshots = self.ctx.quotas.get_all_snapshots()
+        project_path = Path(self._project.path) if self._project else None
+        self._quotas_section.update_snapshots(
+            snapshots,
+            updating_kinds=self._updating_quota_kinds,
+            project_path=project_path,
+        )
+
+    def _on_refresh_quotas_requested(self) -> None:
+        if not getattr(self.ctx, "quotas", None):
+            return
+        from ia_workspace.quota.models import QuotaStatus
+
+        targets = [AgentKind.CODEX, AgentKind.ANTIGRAVITY]
+        self._updating_quota_kinds = set(targets)
+        self._quotas_section.set_updating(True)
+        self._render_quotas()
+
+        pending = set(targets)
+        failed: set[AgentKind] = set()
+
+        def on_done(kind: AgentKind, snap: object) -> None:
+            # El servicio llama a esto en el hilo principal, una vez por proveedor y siempre
+            # (también tras un error o un plazo agotado): el botón vuelve a estar disponible.
+            pending.discard(kind)
+            self._updating_quota_kinds.discard(kind)
+            if getattr(snap, "status", None) in (QuotaStatus.ERROR, QuotaStatus.STALE):
+                failed.add(kind)
+            try:
+                self._render_quotas()
+            finally:
+                if not pending:
+                    self._quotas_section.set_updating(False)
+                    if failed:
+                        names = " y ".join(k.label for k in targets if k in failed)
+                        self.nav.toast(f"No se pudieron actualizar las cuotas de {names}.")
+                    else:
+                        self.nav.toast("Cuotas de suscripción actualizadas.")
+
+        for kind in targets:
+            self.ctx.quotas.refresh_provider(
+                kind,
+                force=True,
+                callback=lambda snap, k=kind: on_done(k, snap),
+            )
 
     def _on_project_picked(self, *_args: object) -> None:
         if self._syncing:

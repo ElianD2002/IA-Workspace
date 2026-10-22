@@ -126,9 +126,19 @@ class IAWorkspaceApplication(Adw.Application):
                     if spec.mode == "login":
                         return build_login_argv(kind, which=ctx.agents.which)
                     context = spec.brain.launch_reference if spec.brain else None
+                    extra_args = list(spec.args)
+                    if kind is AgentKind.CLAUDE_CODE:
+                        try:
+                            from ia_workspace.quota.claude import get_claude_launch_settings
+                            statusline_script = Path(__file__).resolve().parents[2] / "scripts" / "iaw-claude-statusline"
+                            if statusline_script.is_file():
+                                project_dir = Path(spec.cwd) if spec.cwd else None
+                                extra_args.extend(get_claude_launch_settings(statusline_script, project_dir=project_dir))
+                        except Exception:
+                            pass
                     return build_launch_argv(
                         kind,
-                        spec.args,
+                        tuple(extra_args),
                         prompt=spec.initial_prompt,
                         which=ctx.agents.which,
                         context=context,

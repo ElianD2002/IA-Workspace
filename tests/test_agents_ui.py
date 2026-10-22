@@ -207,7 +207,7 @@ class AgentSessionsTest(unittest.TestCase):
                 # 2. Claude Code en A, en su carpeta real y sin opciones de permisos.
                 c1 = view_a.start_agent(AgentKind.CLAUDE_CODE)
                 check(c1 is not None, "no se inició Claude Code")
-                check(pump(lambda: f"FAKE-CLAUDE cwd={dir_a} args=[]" in text(c1)),
+                check(pump(lambda: f"FAKE-CLAUDE cwd={dir_a}" in text(c1) and ("args=[]" in text(c1) or "statusLine" in text(c1))),
                       f"Claude no arrancó en la carpeta de A: {text(c1)[-200:]!r}")
                 check(os.readlink(f"/proc/{pid(c1)}/cwd") == str(dir_a), "cwd real de Claude incorrecto")
                 check(not any("dangerously" in a or "approve" in a for a in cmdline(pid(c1))),

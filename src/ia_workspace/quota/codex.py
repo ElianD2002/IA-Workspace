@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 import json
 import shutil
 import subprocess
-import time
 
 from ia_workspace.domain.models import AgentKind
 from ia_workspace.quota.models import (
@@ -17,6 +16,7 @@ from ia_workspace.quota.models import (
     QuotaStatus,
     QuotaWindow,
 )
+from ia_workspace.quota.process import BoundedProcess
 
 Which = Callable[[str], str | None]
 Runner = Callable[[list[str], list[str], float], tuple[list[str], str]]
@@ -29,83 +29,57 @@ def _default_stdio_rpc_runner(
     requests: list[str],
     timeout: float,
 ) -> tuple[list[str], str]:
-    """Ejecuta una secuencia de peticiones JSON-RPC sobre stdio y recoge las respuestas."""
-    start_time = time.monotonic()
-    proc = subprocess.Popen(
-        argv,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-    )
+    """Envía mensajes JSON-RPC por stdio en orden y recoge las respuestas, dentro del plazo.
+
+    Cada petición con ``id`` espera su respuesta antes de enviar el siguiente mensaje (el
+    protocolo exige ``initialize`` → ``initialized`` → peticiones); las notificaciones (sin
+    ``id``) se envían sin esperar. Termina al recibir la respuesta de la última petición. El
+    plazo se cumple aunque el servidor no responda (``quota.process``); al vencer, se finaliza
+    el grupo de procesos y se lanza ``TimeoutExpired``.
+    """
+    proc = BoundedProcess(argv, timeout)
     responses: list[str] = []
-    stderr_out = ""
+    answered: set[object] = set()
+    consumed = 0
+
+    def collect() -> None:
+        nonlocal consumed
+        lines = proc.stdout[consumed:].split(b"\n")
+        for raw in lines[:-1]:  # la última puede estar incompleta
+            consumed += len(raw) + 1
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line or len(line) > MAX_LINE_BYTES:
+                continue
+            responses.append(line)
+            try:
+                obj = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(obj, dict) and "id" in obj and ("result" in obj or "error" in obj):
+                answered.add(obj["id"])
+
+    def answered_to(request_id: object) -> Callable[[], bool]:
+        def check() -> bool:
+            collect()
+            return request_id in answered
+
+        return check
 
     try:
-        assert proc.stdin is not None
-        assert proc.stdout is not None
-
         for req in requests:
-            elapsed = time.monotonic() - start_time
-            remaining = max(0.1, timeout - elapsed)
-            proc.stdin.write(req + "\n")
-            proc.stdin.flush()
-
-        # Leemos respuestas hasta timeout o EOF
-        while True:
-            elapsed = time.monotonic() - start_time
-            if elapsed >= timeout:
-                raise subprocess.TimeoutExpired(argv, timeout)
-            line = proc.stdout.readline(MAX_LINE_BYTES)
-            if not line:
-                break
-            line_str = line.strip()
-            if line_str:
-                responses.append(line_str)
-                # Si hemos obtenido respuestas para todas las solicitudes con id correlacionado
-                # verificamos si ya tenemos la respuesta final buscada
-                try:
-                    obj = json.loads(line_str)
-                    if isinstance(obj, dict) and obj.get("id") == len(requests):
-                        break
-                except (json.JSONDecodeError, ValueError):
-                    pass
-
-        try:
-            proc.stdin.close()
-        except OSError:
-            pass
-
-        try:
-            proc.wait(timeout=max(0.1, timeout - (time.monotonic() - start_time)))
-        except subprocess.TimeoutExpired:
-            proc.terminate()
+            proc.send(req + "\n")
             try:
-                proc.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=0.5)
-
-    except Exception:
-        try:
-            proc.terminate()
-            proc.wait(timeout=0.5)
-        except Exception:
-            try:
-                proc.kill()
-                proc.wait(timeout=0.5)
-            except Exception:
-                pass
-        raise
+                request_id = json.loads(req).get("id")
+            except (json.JSONDecodeError, ValueError, AttributeError):
+                request_id = None
+            if request_id is not None:
+                proc.pump(answered_to(request_id))
+                if request_id not in answered:
+                    break  # el servidor cerró sin responder: no tiene sentido seguir
+        collect()
     finally:
-        if proc.stderr:
-            try:
-                stderr_out = proc.stderr.read()
-            except Exception:
-                pass
-
-    return responses, stderr_out
+        proc.finish()
+    return responses, proc.stderr.decode("utf-8", errors="replace")
 
 
 class CodexQuotaConnector:
@@ -140,6 +114,8 @@ class CodexQuotaConnector:
                 "params": {"clientInfo": {"name": "ia-workspace", "version": "1.0.0"}},
             }
         )
+        # Notificación obligatoria del protocolo tras la respuesta a «initialize».
+        initialized = json.dumps({"jsonrpc": "2.0", "method": "initialized"})
         req2 = json.dumps(
             {
                 "jsonrpc": "2.0",
@@ -150,7 +126,9 @@ class CodexQuotaConnector:
         )
 
         try:
-            responses, stderr_out = self._runner([executable, "app-server"], [req1, req2], self._timeout)
+            responses, stderr_out = self._runner(
+                [executable, "app-server"], [req1, initialized, req2], self._timeout
+            )
         except subprocess.TimeoutExpired:
             return ProviderQuotaSnapshot(
                 provider=AgentKind.CODEX,
@@ -178,7 +156,7 @@ class CodexQuotaConnector:
                 continue
 
         if not rate_limit_resp:
-            detail_msg = f"Codex app-server no devolvió respuesta para rateLimits. {stderr_out}".strip()
+            detail_msg = f"Codex app-server no devolvió respuesta para rateLimits. {stderr_out.strip()[:200]}".strip()
             return ProviderQuotaSnapshot(
                 provider=AgentKind.CODEX,
                 status=QuotaStatus.ERROR,

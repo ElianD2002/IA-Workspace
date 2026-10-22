@@ -231,11 +231,11 @@ class PromptTransferTest(unittest.TestCase):
                 check(c1 is not None, "no se seleccionó la sesión de Claude tras transferir")
                 check(pump(lambda: f"FAKE-CLAUDE-READY" in text(c1)), f"Claude no arrancó: {text(c1)[-300:]!r}")
                 out = text(c1)
-                check(argc(out) == 2, f"Claude: se esperaban 2 argumentos (-- y el prompt), ARGC={argc(out)}")
                 received = parse_args(out)
-                check(received[:1] == ["--"], f"Claude: falta el separador --: {received[:1]!r}")
-                check(received[1] == TRICKY_PROMPT if len(received) > 1 else False,
-                      f"Claude no recibió el prompt intacto: {received[1] if len(received) > 1 else None!r}")
+                check("--" in received, f"Claude: falta el separador --: {received!r}")
+                sep_idx = received.index("--")
+                check(received[sep_idx + 1] == TRICKY_PROMPT if len(received) > sep_idx + 1 else False,
+                      f"Claude no recibió el prompt intacto: {received[sep_idx + 1] if len(received) > sep_idx + 1 else None!r}")
                 check(os.readlink(f"/proc/{pid(c1)}/cwd") == str(dir_a), "Claude no arrancó en la carpeta de A")
                 check(view_a.state.prompt_draft == "", "el borrador no se vació tras transferir con éxito")
                 check(view_a._prompt.get_buffer().get_text(

@@ -180,7 +180,8 @@ class BrainBridgeUITest(unittest.TestCase):
                 managed.add(pid(c_beta))
                 check(pump(lambda: "FAKE-CLAUDE-READY" in text(c_beta)), "Claude en Beta no arrancó")
                 args_beta = argv(c_beta)[1:]
-                check(args_beta == [], f"Claude en Beta recibió argumentos inesperados: {args_beta}")
+                non_settings_beta = [a for a in args_beta if a != "--settings" and not a.startswith('{"statusLine"')]
+                check(non_settings_beta == [], f"Claude en Beta recibió argumentos inesperados: {args_beta}")
                 check(session(c_beta).spec.brain.status is BrainLinkStatus.UNAVAILABLE, "Beta no reportó UNAVAILABLE")
 
                 # 2. Proyecto Alfa: Claude Code recibe --append-system-prompt
@@ -189,16 +190,16 @@ class BrainBridgeUITest(unittest.TestCase):
                 managed.add(pid(c_alfa))
                 check(pump(lambda: "FAKE-CLAUDE-READY" in text(c_alfa)), "Claude en Alfa no arrancó")
                 args_alfa = argv(c_alfa)[1:]
-                check(len(args_alfa) == 2, f"Claude en Alfa: se esperaban 2 argumentos, hubo {len(args_alfa)}")
-                check(args_alfa[0] == "--append-system-prompt", f"falta --append-system-prompt: {args_alfa}")
-                check("iaw-brain" in args_alfa[1] and "read <ruta-relativa>" in args_alfa[1], f"la referencia no contiene iaw-brain: {args_alfa[1]}")
-                check(len(args_alfa[1]) < 850, f"la referencia supera los 850 caracteres: len={len(args_alfa[1])}")
+                check("--append-system-prompt" in args_alfa, f"falta --append-system-prompt: {args_alfa}")
+                prompt_idx = args_alfa.index("--append-system-prompt")
+                check("iaw-brain" in args_alfa[prompt_idx + 1] and "read <ruta-relativa>" in args_alfa[prompt_idx + 1], f"la referencia no contiene iaw-brain: {args_alfa[prompt_idx + 1]}")
+                check(len(args_alfa[prompt_idx + 1]) < 850, f"la referencia supera los 850 caracteres: len={len(args_alfa[prompt_idx + 1])}")
                 check(session(c_alfa).spec.brain.status is BrainLinkStatus.APPLIED, "Alfa no reportó APPLIED")
 
                 # Comprobamos que una entrada posterior no repita la referencia
                 ctx.sessions.send_input(c_alfa, "pregunta de prueba\n")
                 check(pump(lambda: "CLAUDE> pregunta de prueba" in text(c_alfa)), "Claude no recibió la entrada")
-                check(len(argv(c_alfa)[1:]) == 2, "se alteró el argv de la sesión activa")
+                check(len(argv(c_alfa)[1:]) == len(args_alfa), "se alteró el argv de la sesión activa")
 
                 # 3. Proyecto Alfa: Codex recibe -c developer_instructions
                 x_alfa = view_a.start_agent(AgentKind.CODEX)

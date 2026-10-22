@@ -17,15 +17,16 @@ from ia_workspace.quota.models import (
     QuotaStatus,
     QuotaWindow,
 )
+from ia_workspace.quota.process import run_bounded
 
 Which = Callable[[str], str | None]
 Runner = Callable[[list[str], float], tuple[int, str, str]]
 
 
 def _default_cmd_runner(argv: list[str], timeout: float) -> tuple[int, str, str]:
-    """Ejecuta un comando con timeout y captura stdout y stderr."""
-    res = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-    return res.returncode, res.stdout, res.stderr
+    """Ejecuta un comando y captura stdout y stderr con un plazo que se cumple siempre
+    (finaliza el grupo de procesos entero, también los nietos que dejen tuberías abiertas)."""
+    return run_bounded(argv, timeout)
 
 
 def _slugify(text: str) -> str:

@@ -158,6 +158,22 @@ button.status-pill {
   font-size: 12px;
   background-color: color-mix(in srgb, currentColor 10%, transparent);
 }
+
+/* ---- Consumo de suscripciones (Fase 5B.2) ---- */
+.quota-card {
+  padding: 16px 18px;
+  border-radius: 12px;
+}
+.quota-window-row {
+  padding: 4px 0;
+}
+progressbar.warning > trough > progress {
+  background-color: #e5a50a;
+}
+progressbar.error > trough > progress {
+  background-color: #e01b24;
+}
+
 .sim-label {
   font-size: 10px;
   font-weight: 800;

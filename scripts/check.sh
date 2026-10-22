@@ -42,7 +42,7 @@ echo "== Iconos generados a partir del original"
 python3 scripts/build_icons.py --check
 
 echo "== Pruebas de lógica"
-(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process test_agents test_fixes test_prompt_transfer test_icon test_web_policy test_brain test_brain_bridge test_autonomy test_quotas)
+(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process test_agents test_fixes test_prompt_transfer test_icon test_web_policy test_brain test_brain_bridge test_autonomy test_quotas test_quota_refresh)
 
 source "$ROOT/scripts/_broadway.sh"
 if start_broadway; then
@@ -75,6 +75,7 @@ run_ui_test test_brain_ui "Cerebro compartido"
 run_ui_test test_brain_bridge_ui "Puente de contexto del Cerebro a agentes"
 run_ui_test test_brain_proposals_ui "Propuestas del Cerebro"
 run_ui_test test_clipboard "Portapapeles y menús contextuales"
+run_ui_test test_quotas_ui "Panel visual de consumo de suscripciones"
 
 # Ningún dato de cuenta (de los dobles de prueba) debe acabar en registros.
 if grep -rIl -E "persona@example\.invalid|FAKE-ORG-SECRET-123|sim_session_7f3a" "$ROOT/var"/*.log 2>/dev/null; then
