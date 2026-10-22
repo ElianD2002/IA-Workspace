@@ -669,11 +669,12 @@ class MigrationV4Tests(unittest.TestCase):
             conn.close()
             db = Database(path)
             self.assertEqual(db.version, SCHEMA_VERSION)
-            self.assertEqual(SCHEMA_VERSION, 7)
+            self.assertEqual(SCHEMA_VERSION, 8)
             self.assertEqual(db.conn.execute("SELECT memory_key FROM brain_projects").fetchone()[0],
                              "migrado-0123456789ab")
             self.assertEqual(db.conn.execute("SELECT COUNT(*) FROM brain_proposals").fetchone()[0], 0)
             self.assertEqual(db.conn.execute("SELECT COUNT(*) FROM project_agent_modes").fetchone()[0], 0)
+            self.assertEqual(db.conn.execute("SELECT COUNT(*) FROM subscription_quotas").fetchone()[0], 0)
             self.assertEqual(db.conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             db.close()
 

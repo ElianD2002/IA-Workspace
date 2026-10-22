@@ -78,6 +78,7 @@ class AppContext:
     chat_links: ChatLinkService
     prompt_transfers: PromptTransferService
     autonomy: AgentAutonomyRepository
+    quotas: QuotaService | None = None
     brain: BrainService | None = None  # None sin carpeta de datos (pruebas con ":memory:")
     simulated_agents: bool = False
 
@@ -97,6 +98,11 @@ class AppContext:
 
             for kind in SELECTABLE_AGENTS:
                 sessions.register_backend(SimulatedBackend(kind))
+        from ia_workspace.quota.repository import QuotaRepository
+        from ia_workspace.quota.service import QuotaService
+
+        quota_repo = QuotaRepository(db)
+        quotas = QuotaService(repo=quota_repo, dispatch=dispatch)
         return cls(
             paths=paths,
             db=db,
@@ -108,6 +114,7 @@ class AppContext:
             chat_links=ChatLinkService(ChatLinkRepository(db)),
             prompt_transfers=PromptTransferService(PromptTransferRepository(db)),
             autonomy=AgentAutonomyRepository(db),
+            quotas=quotas,
             brain=build_brain(db, paths) if paths is not None else None,
             simulated_agents=simulated_agents,
         )

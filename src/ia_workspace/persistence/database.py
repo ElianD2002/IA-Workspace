@@ -178,6 +178,31 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         """,
         "CREATE INDEX project_agent_modes_project ON project_agent_modes(project_id)",
     ),
+    # 8 — Límites de uso y cuotas de suscripciones (fase 5B.1).
+    #     Caché global de las mediciones de cuotas de OpenAI Codex, Google Antigravity
+    #     y Claude Code. No almacena tokens, cookies, credenciales ni información privada.
+    (
+        """
+        CREATE TABLE subscription_quotas (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider_id    TEXT    NOT NULL,
+            plan_type      TEXT    NOT NULL DEFAULT '',
+            group_id       TEXT    NOT NULL,
+            group_name     TEXT    NOT NULL,
+            window_id      TEXT    NOT NULL,
+            window_name    TEXT    NOT NULL,
+            window_minutes INTEGER,
+            metric_type    TEXT    NOT NULL CHECK (metric_type IN ('used_percent', 'remaining_percent')),
+            percentage     REAL,
+            resets_at      TEXT,
+            updated_at     TEXT    NOT NULL,
+            status         TEXT    NOT NULL CHECK (status IN ('available', 'pending', 'no_data', 'stale', 'error')),
+            detail         TEXT    NOT NULL DEFAULT '',
+            UNIQUE (provider_id, group_id, window_id)
+        )
+        """,
+        "CREATE INDEX subscription_quotas_provider ON subscription_quotas(provider_id)",
+    ),
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

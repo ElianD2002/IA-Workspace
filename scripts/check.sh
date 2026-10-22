@@ -42,7 +42,7 @@ echo "== Iconos generados a partir del original"
 python3 scripts/build_icons.py --check
 
 echo "== Pruebas de lógica"
-(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process test_agents test_fixes test_prompt_transfer test_icon test_web_policy test_brain test_brain_bridge test_autonomy)
+(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process test_agents test_fixes test_prompt_transfer test_icon test_web_policy test_brain test_brain_bridge test_autonomy test_quotas)
 
 source "$ROOT/scripts/_broadway.sh"
 if start_broadway; then

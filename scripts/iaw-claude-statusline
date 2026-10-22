@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Receptor local para la statusLine de Claude Code en IA Workspace.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-$ROOT/var/pycache}"
+exec python3 -m ia_workspace.quota.claude_receiver "$@"
