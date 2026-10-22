@@ -14,6 +14,7 @@ import os
 from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
 from ia_workspace.agents.auth import AuthState
+from ia_workspace.brain.model import Scope
 from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind, Project, PromptTransfer
 from ia_workspace.services.chat_links import kind_of
 from ia_workspace.services.chatgpt_links import parse_chat_link
@@ -1196,13 +1197,10 @@ class WorkspaceView(Page):
         memory.append(heading)
         self._context_files = w.boxed_list()
         memory.append(self._context_files)
-        hint = w.caption(
-            "La memoria propia del proyecto (estado actual, próximos pasos y reglas) llegará "
-            "con el Cerebro compartido. Será independiente para cada proyecto."
-        )
-        hint.set_wrap(True)
-        hint.set_ellipsize(Pango.EllipsizeMode.NONE)
-        memory.append(hint)
+        self._memory_hint = w.caption("")
+        self._memory_hint.set_wrap(True)
+        self._memory_hint.set_ellipsize(Pango.EllipsizeMode.NONE)
+        memory.append(self._memory_hint)
         brain = Gtk.Button(label="Abrir Cerebro compartido", halign=Gtk.Align.START)
         brain.add_css_class("flat")
         brain.connect("clicked", lambda _b: self.nav.navigate("memory"))
@@ -1213,7 +1211,23 @@ class WorkspaceView(Page):
         pane.append(self._ctx_stack)
         self.ctx.prompt_transfers.subscribe(self._on_transfers_changed)
         self._render_tasks()
+        if self.ctx.brain is not None:
+            self.ctx.brain.subscribe(lambda _scope, _key: self._render_memory_hint())
+        self._render_memory_hint()
         return pane
+
+    def _render_memory_hint(self) -> None:
+        """Cuántos documentos tiene la memoria de este proyecto (sin crearla si aún no existe)."""
+        brain = self.ctx.brain
+        key = brain.existing_project_key(self.project.id) if brain is not None else None
+        total = sum(brain.counts(Scope.PROJECT, key).values()) if key else 0
+        if total:
+            text = (f"La memoria de este proyecto tiene {total} documento{'s' if total != 1 else ''} en el "
+                    "Cerebro compartido. Los agentes la consultan bajo demanda, sin cargarla entera.")
+        else:
+            text = ("Este proyecto aún no tiene documentos en el Cerebro compartido: estado actual, "
+                    "arquitectura, decisiones, reglas… Cada proyecto tiene su propia memoria.")
+        self._memory_hint.set_label(text)
 
     def _on_transfers_changed(self, project_id: int) -> None:
         if project_id == self.project.id:  # nunca se mezclan tareas entre proyectos

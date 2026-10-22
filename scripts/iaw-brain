@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Consulta de la memoria de IA Workspace para agentes (solo lectura). Ver --help.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-$ROOT/var/pycache}"
+exec python3 -m ia_workspace.brain "$@"

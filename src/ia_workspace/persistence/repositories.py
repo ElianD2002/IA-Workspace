@@ -213,6 +213,32 @@ class PromptTransferRepository:
         return [self._row(r) for r in rows]
 
 
+class BrainProjectRepository:
+    """Identificador estable de la memoria de cada proyecto (nombre de su carpeta)."""
+
+    def __init__(self, db: Database) -> None:
+        self._conn = db.conn
+
+    def key_for(self, project_id: int) -> str | None:
+        row = self._conn.execute("SELECT memory_key FROM brain_projects WHERE project_id = ?", (project_id,)).fetchone()
+        return row["memory_key"] if row else None
+
+    def assign(self, project_id: int, memory_key: str) -> str:
+        """Asigna el identificador si el proyecto aún no tiene uno; devuelve el definitivo."""
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO brain_projects (project_id, memory_key, created_at) VALUES (?, ?, ?)",
+                (project_id, memory_key, _now()),
+            )
+        key = self.key_for(project_id)
+        assert key is not None
+        return key
+
+    def project_for_key(self, memory_key: str) -> int | None:
+        row = self._conn.execute("SELECT project_id FROM brain_projects WHERE memory_key = ?", (memory_key,)).fetchone()
+        return row["project_id"] if row else None
+
+
 class WorkspaceStateRepository:
     def __init__(self, db: Database) -> None:
         self._conn = db.conn

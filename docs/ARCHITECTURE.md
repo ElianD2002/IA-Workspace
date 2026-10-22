@@ -329,12 +329,69 @@ Portapapeles del sistema (GNOME Wayland / Gdk.Clipboard)
   «En ejecución»: nunca se deduce que una tarea terminó bien por ver su prompt. La salida
   de la terminal se conserva, y la barra de la sesión muestra el detalle final.
 
+## Cerebro compartido (fase 3A)
+
+```
+brain/                                   <datos>/brain  (XDG instalada · var/brain desde el código)
+  global/INDEX.md, preferencias/, convenciones/, entorno/
+  projects/<nombre>-<12 hex>/INDEX.md, estado/, arquitectura/, modulos/<módulo>/,
+                             decisiones/, reglas/, proximos/, sesiones/
+  .trash/<ámbito>/<fecha>/               documentos eliminados (recuperables a mano)
+```
+
+- **Markdown canónico.** Cada documento es `categoría/slug.md` (o `modulos/<módulo>/slug.md`)
+  con una cabecera mínima (`title`, `tags`, `updated`); la categoría y el módulo salen de
+  la ruta. Máximo 64 KiB por documento: los temas grandes se dividen. Se rechaza guardar
+  credenciales aparentes (claves API, tokens, claves privadas, contraseñas).
+- **SQLite como índice.** Migración 4: `brain_projects` (identificador estable de la memoria
+  de cada proyecto: no cambia al renombrar y dos proyectos con el mismo nombre nunca
+  comparten carpeta) y `brain_documents` (metadatos, hash, fecha). La búsqueda usa una
+  tabla FTS5 *contentless* (`unicode61 remove_diacritics 2`): guarda el índice invertido,
+  no el texto. Se crea fuera de las migraciones porque es derivada; sin FTS5 se busca
+  leyendo los archivos. Todo el índice puede reconstruirse a partir del Markdown.
+- **Sincronización.** `BrainService.sync()` compara fecha y tamaño (y hash si cambiaron),
+  recoge ediciones hechas a mano, informa de archivos fuera de lugar, binarios o enormes sin
+  indexarlos y regenera `INDEX.md` solo si cambia.
+- **Localizar → seleccionar → leer.** `INDEX.md` y `list()` solo dan metadatos y una línea de
+  resumen; `search()` consulta FTS5 (BM25 con más peso para el título) y abre únicamente los
+  documentos encontrados para el fragmento; `read()` da el documento completo bajo demanda.
+  Las consultas se convierten en términos entre comillas: nunca son sintaxis de FTS5.
+- **Aislamiento.** Toda operación lleva ámbito e identificador; `BrainStore` deriva la raíz y
+  rechaza rutas absolutas, `..`, componentes ocultos, barras invertidas, bytes nulos y
+  enlaces simbólicos, y comprueba que la ruta resuelta siga dentro de la raíz. La memoria
+  global solo contiene preferencias del usuario.
+- **Agentes.** `scripts/iaw-brain` (`python3 -m ia_workspace.brain`) ofrece `index`, `list`,
+  `search` y `read`, con `--global` y `--json`. Deduce el proyecto de la carpeta actual (la
+  del agente) y no tiene opción para elegir otro. `agent_brief()` genera la referencia breve
+  (ruta del índice y órdenes) que se copia desde la pantalla; nada se inyecta todavía en
+  las sesiones ni en los prompts.
+- **Interfaz.** Pantalla según el prototipo (selector Proyecto/Global, categorías con
+  contador, búsqueda, tarjetas) con visor de Markdown nativo (etiquetas de `Gtk.TextBuffer`,
+  sin HTML) y editor con validación; eliminar pide confirmación y mueve a la papelera.
+
+### Limitaciones de la fase 3A
+
+- La CLI hace cumplir el aislamiento por la carpeta actual, pero un agente que ejecuta con
+  los permisos del usuario podría leer los archivos de `brain/` directamente: el
+  aislamiento fuerte requiere un sandbox del agente (fuera de esta fase).
+- Quitar un proyecto del registro conserva su carpeta de memoria (no se borran datos), pero
+  ya no está asociada a ningún proyecto: si se vuelve a registrar, recibe una memoria nueva.
+  Nunca se reasocia por nombre ni por id (los ids no se reutilizan: `AUTOINCREMENT` y
+  `ON DELETE CASCADE`). La recuperación explícita queda pendiente de autorización porque
+  requiere una migración nueva.
+- Desde el código la memoria vive en `var/brain/` y una instalación usaría
+  `$XDG_DATA_HOME/ia-workspace/brain/`: son independientes y no se migran ni se fusionan
+  automáticamente. `scripts/iaw-brain` siempre consulta los datos de su propia copia.
+- Sin resúmenes automáticos, actualización autónoma, Notion ni inyección de contexto:
+  la instrucción para agentes se copia a mano.
+
 ## Persistencia
 
 - `persistence/database.py`: migraciones en `MIGRATIONS`, solo se añaden al final y se
   registran en `PRAGMA user_version`. Una base de datos más nueva que el código se rechaza.
 - Tablas actuales: `projects`, `project_ui_state` (JSON del `WorkspaceState`), `settings`,
-  `chat_links` (desde la migración 2) y `prompt_transfers` (desde la migración 3).
+  `chat_links` (desde la migración 2), `prompt_transfers` (desde la migración 3) y
+  `brain_projects`/`brain_documents` (desde la migración 4; FTS5 `brain_fts` aparte).
 - El estado visual se acumula en memoria (`mark_dirty`) y se escribe cada 5 s y al salir.
 
 ## Correspondencia con el prototipo (`docs/design/`)

@@ -5,10 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ia_workspace.agents.catalog import AgentCatalog
+from ia_workspace.brain.service import BrainService
 from ia_workspace.config import AppPaths
 from ia_workspace.domain.models import SELECTABLE_AGENTS
 from ia_workspace.persistence.database import Database
+from ia_workspace.persistence.brain_index import BrainIndex
 from ia_workspace.persistence.repositories import (
+    BrainProjectRepository,
     ChatLinkRepository,
     ProjectRepository,
     PromptTransferRepository,
@@ -22,6 +25,17 @@ from ia_workspace.services.workspace import WorkspaceController
 from ia_workspace.sessions.manager import Dispatch, Schedule, SessionManager, _direct, _no_timer
 
 
+def build_brain(db: Database, paths: AppPaths) -> BrainService:
+    """Cerebro compartido en ``<datos>/brain`` (XDG al estar instalada; ``var/`` desde el código)."""
+    projects = ProjectRepository(db)
+    return BrainService(
+        paths.data_dir / "brain",
+        BrainIndex(db.conn),
+        BrainProjectRepository(db),
+        project_name=lambda pid: (p.name if (p := projects.get(pid)) is not None else None),
+    )
+
+
 @dataclass
 class AppContext:
     paths: AppPaths | None
@@ -33,6 +47,7 @@ class AppContext:
     agents: AgentCatalog
     chat_links: ChatLinkService
     prompt_transfers: PromptTransferService
+    brain: BrainService | None = None  # None sin carpeta de datos (pruebas con ":memory:")
     simulated_agents: bool = False
 
     @classmethod
@@ -61,6 +76,7 @@ class AppContext:
             agents=AgentCatalog(dispatch=dispatch),
             chat_links=ChatLinkService(ChatLinkRepository(db)),
             prompt_transfers=PromptTransferService(PromptTransferRepository(db)),
+            brain=build_brain(db, paths) if paths is not None else None,
             simulated_agents=simulated_agents,
         )
 

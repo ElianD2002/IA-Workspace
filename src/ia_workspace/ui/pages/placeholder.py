@@ -35,16 +35,6 @@ class TasksPage(_PlannedPage):
     )
 
 
-class MemoryPage(_PlannedPage):
-    TITLE = "Cerebro compartido"
-    ICON = "user-bookmarks-symbolic"
-    HEADING = "Memoria por proyecto"
-    DESCRIPTION = (
-        "Decisiones técnicas, estado actual, próximos pasos y reglas para agentes, separados "
-        "por proyecto. Tú decides qué conclusiones se guardan."
-    )
-
-
 class HistoryPage(_PlannedPage):
     TITLE = "Historial y revisión"
     ICON = "document-open-recent-symbolic"

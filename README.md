@@ -4,11 +4,11 @@ Aplicación nativa para Linux (GTK 4 + Libadwaita) para gestionar proyectos loca
 coordinar agentes de IA —Claude Code, Codex y Google Antigravity— junto con
 conversaciones vinculadas de ChatGPT y memoria independiente por proyecto.
 
-> **Estado: fase 2B.2 — transferencia de prompts.** Proyectos en SQLite, workspaces
+> **Estado: fase 3A — cerebro compartido en Markdown.** Proyectos en SQLite, workspaces
 > independientes, terminales VTE persistentes, sesiones de Claude Code, Codex y Google
-> Antigravity mediante sus CLI oficiales, y transferencia del editor de prompts a una
-> sesión nueva de cualquiera de los tres. Todavía no hay cerebro compartido ni
-> orquestación.
+> Antigravity mediante sus CLI oficiales, transferencia de prompts y memoria por proyecto
+> y global en archivos Markdown, consultable por los agentes bajo demanda. Todavía no hay
+> orquestación ni actualización automática de la memoria.
 
 ## Requisitos (paquetes del sistema)
 
@@ -99,6 +99,26 @@ abren en el navegador predeterminado.
 
 Para probar el inicio de sesión de forma aislada, sin tocar los datos de la aplicación:
 `python3 scripts/chatgpt_poc.py` (y `--clear` para borrar sus datos).
+
+## Cerebro compartido (memoria en Markdown)
+
+La pantalla **Cerebro compartido** (Alt+5) guarda el conocimiento de cada proyecto —estado
+actual, arquitectura, documentación por módulo, decisiones, reglas, próximos pasos y
+resúmenes de sesiones— y, aparte, una **memoria global** con tus preferencias generales.
+Cada documento es un archivo `.md` en `$XDG_DATA_HOME/ia-workspace/brain/` (desde el
+código, `var/brain/`); IA Workspace nunca escribe en tus repositorios ni modifica sus
+`AGENTS.md` o `CLAUDE.md`. Cada memoria tiene un `INDEX.md` ligero con una línea por
+documento.
+
+Los agentes no reciben la memoria: **Copiar instrucción** da una referencia breve al índice
+y a la consulta bajo demanda, que funciona desde la carpeta del proyecto:
+
+```bash
+scripts/iaw-brain list                      # una línea por documento
+scripts/iaw-brain search "fechas utc"       # resultados con un fragmento
+scripts/iaw-brain read decisiones/adr-006-fechas-en-utc.md
+scripts/iaw-brain list --global             # memoria global
+```
 
 ## Atajos
 

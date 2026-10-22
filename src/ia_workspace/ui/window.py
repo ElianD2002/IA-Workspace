@@ -15,7 +15,8 @@ from ia_workspace.sessions.models import SessionEvent
 from ia_workspace.ui.pages.agents import AgentsPage
 from ia_workspace.ui.pages.base import Page
 from ia_workspace.ui.pages.home import HomePage
-from ia_workspace.ui.pages.placeholder import HistoryPage, MemoryPage, TasksPage
+from ia_workspace.ui.pages.memory import MemoryPage
+from ia_workspace.ui.pages.placeholder import HistoryPage, TasksPage
 from ia_workspace.ui.pages.projects import ProjectsPage
 from ia_workspace.ui.pages.workspace import WorkspaceView
 from ia_workspace.ui.sidebar import NAV_ITEMS, Sidebar

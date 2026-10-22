@@ -77,6 +77,38 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         """,
         "CREATE INDEX prompt_transfers_project ON prompt_transfers(project_id, id DESC)",
     ),
+    # 4 — Cerebro compartido. Los documentos son archivos Markdown (fuente canónica); aquí
+    #     solo hay el identificador estable de la memoria de cada proyecto y metadatos para
+    #     el índice y la búsqueda. El índice de texto (FTS5) se crea aparte: es derivado y
+    #     puede reconstruirse en cualquier momento a partir de los archivos.
+    (
+        """
+        CREATE TABLE brain_projects (
+            project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+            memory_key TEXT    NOT NULL UNIQUE,
+            created_at TEXT    NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE brain_documents (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope       TEXT    NOT NULL CHECK (scope IN ('global', 'project')),
+            project_key TEXT    NOT NULL,
+            relpath     TEXT    NOT NULL,
+            title       TEXT    NOT NULL,
+            category    TEXT    NOT NULL,
+            module      TEXT    NOT NULL DEFAULT '',
+            tags        TEXT    NOT NULL DEFAULT '',
+            summary     TEXT    NOT NULL DEFAULT '',
+            size        INTEGER NOT NULL,
+            mtime_ns    INTEGER NOT NULL,
+            sha256      TEXT    NOT NULL,
+            updated     TEXT,
+            UNIQUE (scope, project_key, relpath)
+        )
+        """,
+        "CREATE INDEX brain_documents_scope ON brain_documents(scope, project_key, category)",
+    ),
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

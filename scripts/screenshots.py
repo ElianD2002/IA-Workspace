@@ -118,6 +118,18 @@ def main() -> None:
             win._workspaces[ids[1]]._prompt.get_buffer().set_text("Revisa la migración de facturas.")
             win._workspaces[ids[1]]._start_session(with_prompt=True)
             pump(2.5)
+            from ia_workspace.brain.model import Scope
+
+            key = ctx.brain.project_key(ctx.projects.get(ids[0]))
+            ctx.brain.create(Scope.PROJECT, key, "estado", "Rama activa",
+                             "feature/mantenimiento-filtros — filtro por estado de mantenimiento en el listado.", "git")
+            ctx.brain.create(Scope.PROJECT, key, "estado", "Estabilidad",
+                             "Reportes y asignación de conductores estables en producción.")
+            ctx.brain.create(Scope.PROJECT, key, "decisiones", "ADR-006 · Fechas en UTC",
+                             "Se guardan en UTC; la conversión a la zona local se hace solo al presentar.", "fechas")
+            ctx.brain.create(Scope.PROJECT, key, "modulos", "Webhooks de pagos",
+                             "Reciben eventos firmados y se reintentan tres veces.", "pagos", module="Pagos")
+            ctx.brain.create(Scope.GLOBAL, "", "preferencias", "Idioma", "Responde siempre en español.")
             for screen in ("home", "projects", "agents", "memory"):
                 win.navigate(screen)
                 capture(win, f"{scheme}-{('home', 'projects', 'agents', 'memory').index(screen) + 1:02d}-{screen}")
@@ -125,6 +137,17 @@ def main() -> None:
                                 "Plan: mantenimiento preventivo")
             ctx.chat_links.link(ids[0], "https://chatgpt.com/share/aaaabbbb-cccc-8000-9999-000011112222",
                                 "Esquema de facturación (compartido)")
+            memory_page = win._pages["memory"]
+            win.navigate("memory")
+            memory_page.select_project(ids[0])
+            memory_page.select_category("estado")
+            capture(win, f"{scheme}-04b-memoria-estado")
+            memory_page.set_query("utc")
+            capture(win, f"{scheme}-04c-memoria-busqueda")
+            memory_page.set_query("")
+            memory_page.open_document("decisiones/adr-006-fechas-en-utc.md")
+            capture(win, f"{scheme}-04d-memoria-documento")
+            memory_page._last_dialog.force_close()
             win.open_project(ids[0])
             capture(win, f"{scheme}-05-workspace")
 
