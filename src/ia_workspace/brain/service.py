@@ -31,17 +31,30 @@ from pathlib import Path
 from ia_workspace.brain.model import (
     INDEX_FILENAME,
     MAX_DOCUMENT_BYTES,
+    MAX_TITLE_LENGTH,
     BrainError,
     DocumentMeta,
     Scope,
+    _first_heading,
     categories_for,
     category,
     clean_tags,
+    find_secret,
     parse_document,
     serialize_document,
     slugify,
     summarize,
     validate_document,
+)
+from ia_workspace.brain.proposals import (
+    BrainConflictError,
+    ProposalContent,
+    ProposalMeta,
+    ProposalOperation,
+    ProposalRepository,
+    ProposalStatus,
+    parse_proposal,
+    serialize_proposal,
 )
 from ia_workspace.brain.store import BrainStore
 from ia_workspace.domain.models import FolderIdentity, Project, RetiredMemory
@@ -138,12 +151,15 @@ class BrainService:
         index: BrainIndex,
         projects: BrainProjectRepository,
         project_name: Callable[[int], str | None] = lambda _id: None,
+        proposals: ProposalRepository | None = None,
         readonly: bool = False,
     ) -> None:
         self.store = BrainStore(root, readonly=readonly)
         self._index = index
         self._projects = projects
         self._project_name = project_name
+        self._proposals = proposals
+        self._readonly = readonly
         self._listeners: list[Listener] = []
 
     @property
@@ -242,6 +258,10 @@ class BrainService:
                 self._index.remove(row.id)
                 report.removed += 1
         report.index_written = self.store.write_index(scope, project_key, self.render_index(scope, project_key))
+        if scope is Scope.PROJECT and project_key and self._proposals is not None:
+            project_id = self._projects.project_for_key(project_key)
+            if project_id is not None:
+                self._reconcile_proposals(project_id, project_key)
         return report
 
     def _sync_one(self, scope: Scope, project_key: str, relpath: str, row, report: SyncReport) -> None:
@@ -445,5 +465,325 @@ class BrainService:
             f"- Índice: {self.index_path(Scope.PROJECT, key)}\n"
             f"- CLI: {command}\n"
             "  * index: ver índice | search \"<términos>\": buscar | read <ruta-relativa>: leer documento específico\n"
+            "  * propose: sugerir cambios a la memoria (el usuario los revisa y aprueba)\n"
             "Ejecuta en la carpeta del proyecto: solo accede a su memoria y a la global."
         )
+
+    # ---- propuestas de actualización (fase 3C.1) ---------------------------------------
+
+    def propose(
+        self,
+        project: Project,
+        operation: ProposalOperation | str,
+        title: str,
+        body: str,
+        *,
+        relpath: str | None = None,
+        category_key: str | None = None,
+        module: str = "",
+        tags: str | tuple[str, ...] = (),
+        summary: str = "",
+        agent_kind: str = "",
+    ) -> ProposalMeta:
+        """Registra una propuesta de actualización de la memoria para que el usuario la revise."""
+        if self._readonly:
+            raise BrainError("La memoria está abierta en modo de solo lectura.")
+        if self._proposals is None:
+            raise BrainError("El repositorio de propuestas no está configurado.")
+
+        secret = find_secret(body) or find_secret(title)
+        if secret:
+            raise BrainError(f"El texto parece contener {secret}: quítalo antes de proponerlo.")
+
+        raw_bytes = body.encode("utf-8")
+        if len(raw_bytes) > MAX_DOCUMENT_BYTES:
+            raise BrainError(
+                f"El contenido propuesto supera el límite permitido ({len(raw_bytes) // 1024} KiB > 64 KiB)."
+            )
+
+        op = ProposalOperation(operation)
+        key = self.project_key(project)
+
+        clean_t = clean_tags(tags)
+        clean_title = title.strip()
+
+        base_hash = ""
+        cat_key = ""
+        if op is ProposalOperation.UPDATE:
+            if not relpath:
+                raise BrainError("Para actualizar se debe indicar la ruta relativa del documento existente.")
+            self.store.check_relpath(relpath)
+            if not self.store.exists(Scope.PROJECT, key, relpath):
+                raise BrainError(f"El documento «{relpath}» no existe en la memoria.")
+            doc_raw = self.store.resolve(Scope.PROJECT, key, relpath).read_bytes()
+            base_hash = hashlib.sha256(doc_raw).hexdigest()
+            cat_key = relpath.partition("/")[0]
+            if not clean_title:
+                existing = self.read(Scope.PROJECT, key, relpath)
+                clean_title = existing.meta.title
+            target_relpath = relpath
+        else:
+            # CREATE
+            cat_key = category_key or (relpath.partition("/")[0] if relpath else "")
+            cat = category(Scope.PROJECT, cat_key)
+            if cat is None:
+                raise BrainError(
+                    f"Categoría no válida. Debe ser una de: {', '.join(c.key for c in categories_for(Scope.PROJECT))}"
+                )
+            if not clean_title:
+                clean_title = _first_heading(body) or (Path(relpath).stem if relpath else "") or "Nuevo documento"
+            clean_title = clean_title[:MAX_TITLE_LENGTH]
+            if relpath:
+                self.store.check_relpath(relpath)
+                target_relpath = relpath
+            else:
+                folder = f"{cat.key}/{slugify(module, 40)}" if (cat.modular and module.strip()) else cat.key
+                base = slugify(clean_title)
+                target_relpath = f"{folder}/{base}.md"
+            if self.store.exists(Scope.PROJECT, key, target_relpath):
+                raise BrainError(
+                    f"El documento «{target_relpath}» ya existe. Usa la operación «update» para actualizarlo."
+                )
+
+        proposal_id = f"p-{secrets.token_hex(4)}"
+        while self._proposals.get(proposal_id) is not None:
+            proposal_id = f"p-{secrets.token_hex(4)}"
+
+        cat = category(Scope.PROJECT, cat_key)
+        mod = module if (cat and cat.modular) else ""
+
+        meta = ProposalMeta(
+            id=proposal_id,
+            project_id=project.id,
+            project_key=key,
+            agent_kind=agent_kind or "cli",
+            operation=op,
+            relpath=target_relpath,
+            title=clean_title,
+            category=cat_key,
+            module=mod,
+            tags=clean_t,
+            summary=summary.strip() or summarize(body),
+            base_hash=base_hash,
+            status=ProposalStatus.PENDING,
+            created_at=datetime.now(UTC).replace(microsecond=0),
+        )
+
+        content_text = serialize_proposal(meta, body)
+        self.store.write_proposal_text(key, proposal_id, content_text)
+        try:
+            self._proposals.add(meta)
+        except Exception:
+            self.store.delete_proposal_file(key, proposal_id)
+            raise
+        self._emit(Scope.PROJECT, key)
+        return meta
+
+    def _reconcile_proposals(self, project_id: int, project_key: str) -> None:
+        if self._proposals is None:
+            return
+        p_root = self.store.proposals_root(project_key)
+        on_disk_ids: set[str] = set()
+        if p_root.is_dir():
+            for p_file in p_root.glob("p-*.md"):
+                if p_file.is_file() and not p_file.is_symlink():
+                    proposal_id = p_file.stem
+                    on_disk_ids.add(proposal_id)
+                    existing = self._proposals.get(proposal_id)
+                    if existing is None:
+                        try:
+                            text = p_file.read_text(encoding="utf-8")
+                            fields, body = parse_proposal(text)
+                            created_str = fields.get("created_at") or fields.get("created")
+                            created_at = (
+                                datetime.fromisoformat(created_str)
+                                if created_str
+                                else datetime.fromtimestamp(p_file.stat().st_mtime, UTC).replace(microsecond=0)
+                            )
+                            reviewed_str = fields.get("reviewed_at") or fields.get("reviewed")
+                            reviewed_at = datetime.fromisoformat(reviewed_str) if reviewed_str else None
+                            tags_raw = fields.get("tags", "")
+                            tags = tuple(t.strip() for t in tags_raw.split(",") if t.strip())
+                            meta = ProposalMeta(
+                                id=proposal_id,
+                                project_id=project_id,
+                                project_key=project_key,
+                                agent_kind=fields.get("agent_kind") or fields.get("agent") or "cli",
+                                operation=ProposalOperation(fields.get("operation", "create")),
+                                relpath=fields.get("relpath", ""),
+                                title=fields.get("title", proposal_id),
+                                category=fields.get("category", ""),
+                                module=fields.get("module", ""),
+                                tags=tags,
+                                summary=fields.get("summary") or summarize(body),
+                                base_hash=fields.get("base_hash", ""),
+                                status=ProposalStatus(fields.get("status", "pending")),
+                                created_at=created_at,
+                                reviewed_at=reviewed_at,
+                                review_note=fields.get("review_note", ""),
+                            )
+                            self._proposals.add(meta)
+                        except Exception:
+                            continue
+        for row in self._proposals.list_for_project(project_id):
+            if row.id not in on_disk_ids:
+                self._proposals.delete(row.id)
+
+    def list_proposals(self, project_id: int, status: ProposalStatus | None = None) -> list[ProposalMeta]:
+        if self._proposals is None:
+            return []
+        return self._proposals.list_for_project(project_id, status)
+
+    def count_pending_proposals(self, project_id: int) -> int:
+        if self._proposals is None:
+            return 0
+        return self._proposals.count_pending(project_id)
+
+    def get_proposal(self, project: Project, proposal_id: str) -> ProposalContent:
+        if self._proposals is None:
+            raise BrainError("El repositorio de propuestas no está configurado.")
+        meta = self._proposals.get(proposal_id)
+        if meta is None or meta.project_id != project.id:
+            raise BrainError("Propuesta no encontrada en este proyecto.")
+        text = self.store.read_proposal_text(meta.project_key, proposal_id)
+        _fields, body = parse_proposal(text)
+        return ProposalContent(meta=meta, body=body)
+
+    def approve_proposal(self, project: Project, proposal_id: str) -> DocumentMeta:
+        """Aprueba una propuesta de actualización, verificando que no haya cambiado el original."""
+        if self._readonly:
+            raise BrainError("La memoria está abierta en modo de solo lectura.")
+        if self._proposals is None:
+            raise BrainError("El repositorio de propuestas no está configurado.")
+        meta = self._proposals.get(proposal_id)
+        if meta is None or meta.project_id != project.id:
+            raise BrainError("Propuesta no encontrada en este proyecto.")
+        if meta.status not in (ProposalStatus.PENDING, ProposalStatus.CONFLICT):
+            raise BrainError(f"La propuesta ya fue revisada (estado: {meta.status.label}).")
+
+        content = self.get_proposal(project, proposal_id)
+        body = content.body
+        key = meta.project_key
+
+        if meta.operation is ProposalOperation.UPDATE:
+            if not self.store.exists(Scope.PROJECT, key, meta.relpath):
+                self._proposals.update_status(
+                    proposal_id,
+                    ProposalStatus.CONFLICT,
+                    datetime.now(UTC),
+                    "El documento original ya no existe en la memoria.",
+                )
+                self._emit(Scope.PROJECT, key)
+                raise BrainConflictError("Conflicto: el documento de destino ya no existe en la memoria.")
+            current_raw = self.store.resolve(Scope.PROJECT, key, meta.relpath).read_bytes()
+            current_hash = hashlib.sha256(current_raw).hexdigest()
+            if meta.base_hash and current_hash != meta.base_hash:
+                self._proposals.update_status(
+                    proposal_id,
+                    ProposalStatus.CONFLICT,
+                    datetime.now(UTC),
+                    "El documento cambió después de crearse la propuesta.",
+                )
+                self._emit(Scope.PROJECT, key)
+                raise BrainConflictError(
+                    "Conflicto: el documento original cambió después de crearse la propuesta. "
+                    "Revisa las diferencias antes de aprobar."
+                )
+            doc_meta = self.update(Scope.PROJECT, key, meta.relpath, meta.title, body, tags=meta.tags)
+        else:
+            # CREATE
+            if self.store.exists(Scope.PROJECT, key, meta.relpath):
+                self._proposals.update_status(
+                    proposal_id,
+                    ProposalStatus.CONFLICT,
+                    datetime.now(UTC),
+                    "El documento ya existe en la memoria.",
+                )
+                self._emit(Scope.PROJECT, key)
+                raise BrainConflictError("Conflicto: el documento ya existe en la memoria.")
+            doc_meta = self.create(
+                Scope.PROJECT,
+                key,
+                meta.category,
+                meta.title,
+                body,
+                tags=meta.tags,
+                module=meta.module,
+            )
+
+        now = datetime.now(UTC).replace(microsecond=0)
+        success = self._proposals.update_status(
+            proposal_id,
+            ProposalStatus.APPROVED,
+            now,
+            expected_status=(ProposalStatus.PENDING, ProposalStatus.CONFLICT),
+        )
+        if not success:
+            raise BrainError(f"La propuesta ya fue revisada (estado: {meta.status.label}).")
+        updated_meta = ProposalMeta(
+            id=meta.id,
+            project_id=meta.project_id,
+            project_key=meta.project_key,
+            agent_kind=meta.agent_kind,
+            operation=meta.operation,
+            relpath=meta.relpath,
+            title=meta.title,
+            category=meta.category,
+            module=meta.module,
+            tags=meta.tags,
+            summary=meta.summary,
+            base_hash=meta.base_hash,
+            status=ProposalStatus.APPROVED,
+            created_at=meta.created_at,
+            reviewed_at=now,
+            review_note=meta.review_note,
+        )
+        self.store.write_proposal_text(key, proposal_id, serialize_proposal(updated_meta, body))
+        self._emit(Scope.PROJECT, key)
+        return doc_meta
+
+    def reject_proposal(self, project: Project, proposal_id: str, note: str = "") -> None:
+        """Rechaza una propuesta sin tocar los documentos aprobados."""
+        if self._readonly:
+            raise BrainError("La memoria está abierta en modo de solo lectura.")
+        if self._proposals is None:
+            raise BrainError("El repositorio de propuestas no está configurado.")
+        meta = self._proposals.get(proposal_id)
+        if meta is None or meta.project_id != project.id:
+            raise BrainError("Propuesta no encontrada en este proyecto.")
+        if meta.status not in (ProposalStatus.PENDING, ProposalStatus.CONFLICT):
+            raise BrainError(f"La propuesta ya fue revisada (estado: {meta.status.label}).")
+
+        now = datetime.now(UTC).replace(microsecond=0)
+        success = self._proposals.update_status(
+            proposal_id,
+            ProposalStatus.REJECTED,
+            now,
+            review_note=note,
+            expected_status=(ProposalStatus.PENDING, ProposalStatus.CONFLICT),
+        )
+        if not success:
+            raise BrainError(f"La propuesta ya fue revisada (estado: {meta.status.label}).")
+        content = self.get_proposal(project, proposal_id)
+        updated_meta = ProposalMeta(
+            id=meta.id,
+            project_id=meta.project_id,
+            project_key=meta.project_key,
+            agent_kind=meta.agent_kind,
+            operation=meta.operation,
+            relpath=meta.relpath,
+            title=meta.title,
+            category=meta.category,
+            module=meta.module,
+            tags=meta.tags,
+            summary=meta.summary,
+            base_hash=meta.base_hash,
+            status=ProposalStatus.REJECTED,
+            created_at=meta.created_at,
+            reviewed_at=now,
+            review_note=note,
+        )
+        self.store.write_proposal_text(
+            meta.project_key, proposal_id, serialize_proposal(updated_meta, content.body)
+        )
+        self._emit(Scope.PROJECT, meta.project_key)

@@ -12,6 +12,7 @@ from gi.repository import Adw, Gio, GObject, Gtk, Pango
 
 from ia_workspace.brain.cli import cli_command
 from ia_workspace.brain.model import BrainError, DocumentMeta, Scope, categories_for, category
+from ia_workspace.brain.proposals import ProposalOperation, ProposalStatus
 from ia_workspace.ui import widgets as w
 from ia_workspace.ui.pages.base import Navigator, Page
 
@@ -24,6 +25,7 @@ class MemoryPage(Page):
         self._project = None
         self._project_ids: list[int] = []
         self._categories: dict[Scope, str] = {Scope.PROJECT: "estado", Scope.GLOBAL: "preferencias"}
+        self._proposals_filter = "pending"
         self._query = ""
         self._syncing = False
         self._last_dialog = None
@@ -58,6 +60,7 @@ class MemoryPage(Page):
         self._category_list.connect("row-activated", self._on_category_activated)
         self._category_rows: dict[str, Gtk.ListBoxRow] = {}
         self._category_counts: dict[str, Gtk.Label] = {}
+        self._proposals_row: Gtk.ListBoxRow | None = None
         nav_scroll = Gtk.ScrolledWindow(child=self._category_list, hscrollbar_policy=Gtk.PolicyType.NEVER,
                                         vexpand=True, width_request=230)
 
@@ -157,6 +160,8 @@ class MemoryPage(Page):
     def select_scope(self, scope: Scope) -> None:
         if scope is Scope.PROJECT and self._project is None:
             scope = Scope.GLOBAL
+        if scope is Scope.GLOBAL and self._categories.get(Scope.GLOBAL) == "__proposals__":
+            self._categories[Scope.GLOBAL] = "preferencias"
         self._scope = scope
         self._syncing = True
         self.scope_toggle.set_active_name("project" if scope is Scope.PROJECT else "global")
@@ -170,7 +175,7 @@ class MemoryPage(Page):
             self.refresh()
 
     def select_category(self, key: str) -> None:
-        if category(self._scope, key) is not None:
+        if key == "__proposals__" or category(self._scope, key) is not None:
             self._categories[self._scope] = key
             self._render()
 
@@ -203,9 +208,14 @@ class MemoryPage(Page):
             self.banner.set_title("La memoria global solo guarda tus preferencias generales; "
                                   "no contiene nada de ningún proyecto.")
             self.banner.set_button_label(None)
+        is_proposals = (scope is Scope.PROJECT and self.category_key == "__proposals__")
+        self.search.set_visible(not is_proposals)
+        self.new_button.set_visible(not is_proposals)
         self._render_categories(scope, key)
         w.clear_box(self.cards)
-        if self._query:
+        if is_proposals:
+            self._render_proposals(scope, key)
+        elif self._query:
             self._render_search(scope, key)
         else:
             self._render_category(scope, key)
@@ -215,6 +225,7 @@ class MemoryPage(Page):
         w.clear_box(self._category_list)
         self._category_rows.clear()
         self._category_counts.clear()
+        self._proposals_row = None
         for cat in categories_for(scope):
             box = Gtk.Box(spacing=12)
             box.append(Gtk.Image.new_from_icon_name(cat.icon))
@@ -226,11 +237,28 @@ class MemoryPage(Page):
             self._category_list.append(row)
             self._category_rows[cat.key] = row
             self._category_counts[cat.key] = count
-        current = self._category_rows.get(self.category_key)
-        if current is not None and not self._query:
-            self._category_list.select_row(current)
+        if scope is Scope.PROJECT and self._project is not None:
+            pending_count = self.brain.count_pending_proposals(self._project.id)
+            box = Gtk.Box(spacing=12)
+            box.append(Gtk.Image.new_from_icon_name("document-send-symbolic"))
+            box.append(Gtk.Label(label="Propuestas", xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END))
+            if pending_count > 0:
+                count_w = w.status_pill(str(pending_count), "warning")
+            else:
+                count_w = w.caption("0")
+            box.append(count_w)
+            row = Gtk.ListBoxRow(child=box)
+            row.category_key = "__proposals__"  # type: ignore[attr-defined]
+            self._category_list.append(row)
+            self._proposals_row = row
+        if self.category_key == "__proposals__" and self._proposals_row is not None and not self._query:
+            self._category_list.select_row(self._proposals_row)
         else:
-            self._category_list.unselect_all()
+            current = self._category_rows.get(self.category_key)
+            if current is not None and not self._query:
+                self._category_list.select_row(current)
+            else:
+                self._category_list.unselect_all()
 
     def _on_category_activated(self, _list: Gtk.ListBox, row: Gtk.ListBoxRow) -> None:
         if self._query:
@@ -241,6 +269,8 @@ class MemoryPage(Page):
 
     def _render_category(self, scope: Scope, key: str) -> None:
         cat = category(scope, self.category_key)
+        if cat is None:
+            return
         self.heading.set_label(cat.label)
         self.description.set_label(cat.description)
         docs = self.brain.list(scope, key, cat.key)
@@ -266,6 +296,121 @@ class MemoryPage(Page):
         )
         for hit in hits:
             self.cards.append(self._card(hit.meta, hit.excerpt, show_category=True))
+
+    def _render_proposals(self, scope: Scope, key: str) -> None:
+        if self._project is None:
+            return
+        self.heading.set_label("Propuestas de actualización")
+        self.description.set_label(
+            "Sugerencias de los agentes para actualizar o ampliar la memoria. "
+            "Revisa, compara diferencias y aprueba o rechaza cada propuesta."
+        )
+
+        filter_bar = Gtk.Box(spacing=8, margin_bottom=6)
+        filter_bar.add_css_class("linked")
+        btn_pending = Gtk.ToggleButton(label="Pendientes", active=self._proposals_filter == "pending")
+        btn_history = Gtk.ToggleButton(
+            label="Historial", group=btn_pending, active=self._proposals_filter == "history"
+        )
+
+        def on_filter_changed(_b) -> None:
+            new_filter = "history" if btn_history.get_active() else "pending"
+            if new_filter != self._proposals_filter:
+                self._proposals_filter = new_filter
+                self._render()
+
+        btn_pending.connect("toggled", on_filter_changed)
+        btn_history.connect("toggled", on_filter_changed)
+        filter_bar.append(btn_pending)
+        filter_bar.append(btn_history)
+        self.cards.append(filter_bar)
+
+        all_proposals = self.brain.list_proposals(self._project.id)
+        if self._proposals_filter == "pending":
+            proposals = [p for p in all_proposals if p.status in (ProposalStatus.PENDING, ProposalStatus.CONFLICT)]
+        else:
+            proposals = [p for p in all_proposals if p.status in (ProposalStatus.APPROVED, ProposalStatus.REJECTED)]
+
+        for prop in proposals:
+            self.cards.append(self._proposal_card(prop))
+
+        if not proposals:
+            if self._proposals_filter == "pending":
+                title = "Sin propuestas pendientes"
+                desc = "Cuando un agente ejecute «iaw-brain propose», sus sugerencias aparecerán aquí para tu revisión."
+            else:
+                title = "Sin historial de propuestas"
+                desc = "Las propuestas que apruebes o rechaces se conservarán aquí."
+            status = Adw.StatusPage(icon_name="document-send-symbolic", title=title, description=desc)
+            status.add_css_class("compact")
+            self.cards.append(status)
+
+    def _proposal_card(self, meta: ProposalMeta) -> Gtk.Widget:
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        card.add_css_class("card")
+        card.add_css_class("brain-card")
+        card.proposal_id = meta.id  # type: ignore[attr-defined]
+
+        top = Gtk.Box(spacing=8)
+        op_label = "Nuevo documento" if meta.operation is ProposalOperation.CREATE else "Actualización"
+        top.append(w.status_pill(op_label, "idle"))
+
+        status_style = "warning" if meta.status is ProposalStatus.PENDING else (
+            "error" if meta.status is ProposalStatus.CONFLICT else (
+                "success" if meta.status is ProposalStatus.APPROVED else "idle"
+            )
+        )
+        top.append(w.status_pill(meta.status.label, status_style))
+
+        from ia_workspace.ui.dialogs.proposal_review import _agent_display_name
+        agent_name = _agent_display_name(meta.agent_kind)
+        top.append(w.caption(f"Origen: {agent_name}"))
+
+        spacer = Gtk.Box(hexpand=True)
+        top.append(spacer)
+
+        if meta.status in (ProposalStatus.PENDING, ProposalStatus.CONFLICT):
+            btn_review = Gtk.Button(label="Revisar")
+            btn_review.connect("clicked", lambda _b: self.review_proposal(meta.id))
+            top.append(btn_review)
+
+            btn_approve = Gtk.Button(label="Aprobar")
+            btn_approve.add_css_class("suggested-action")
+            btn_approve.connect("clicked", lambda _b: self.approve_proposal(meta.id))
+            top.append(btn_approve)
+
+            btn_reject = Gtk.Button(label="Rechazar")
+            btn_reject.add_css_class("destructive-action")
+            btn_reject.connect("clicked", lambda _b: self.reject_proposal(meta.id))
+            top.append(btn_reject)
+        else:
+            btn_review = Gtk.Button(label="Ver detalles")
+            btn_review.connect("clicked", lambda _b: self.review_proposal(meta.id))
+            top.append(btn_review)
+
+        card.append(top)
+
+        title = Gtk.Label(label=meta.title, xalign=0, wrap=True)
+        title.add_css_class("heading")
+        card.append(title)
+
+        if meta.summary:
+            summary = Gtk.Label(label=meta.summary, xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR)
+            card.append(summary)
+
+        details = [meta.relpath, w.relative_time(meta.created_at)]
+        if meta.tags:
+            details.append(", ".join(meta.tags))
+        caption = w.caption(" · ".join(details))
+        caption.set_wrap(True)
+        caption.set_ellipsize(Pango.EllipsizeMode.NONE)
+        card.append(caption)
+
+        click = Gtk.GestureClick()
+        click.connect("released", lambda *_: self.review_proposal(meta.id))
+        card.add_controller(click)
+        card.set_tooltip_text("Examinar propuesta y comparar cambios")
+        return card
 
     def _card(self, meta: DocumentMeta, text: str, show_category: bool = False) -> Gtk.Widget:
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -422,4 +567,77 @@ class MemoryPage(Page):
         dialog.connect("response", on_response)
         dialog.present(self.get_root())
         self._last_dialog = dialog
+
+    def review_proposal(self, proposal_id: str) -> None:
+        from ia_workspace.ui.dialogs.proposal_review import ProposalReviewDialog
+
+        if self._project is None or self.brain is None:
+            return
+        try:
+            content = self.brain.get_proposal(self._project, proposal_id)
+        except BrainError as exc:
+            self.nav.toast(str(exc))
+            return
+
+        orig_body = None
+        if content.meta.operation is ProposalOperation.UPDATE:
+            try:
+                orig_doc = self.brain.read(Scope.PROJECT, content.meta.project_key, content.meta.relpath)
+                orig_body = orig_doc.body
+            except BrainError:
+                orig_body = None
+
+        def on_approve(pid: str) -> None:
+            self.approve_proposal(pid)
+
+        def on_reject(pid: str, note: str) -> None:
+            self._do_reject_proposal(pid, note)
+
+        dialog = ProposalReviewDialog(
+            proposal=content,
+            project_name=self._project.name,
+            original_body=orig_body,
+            on_approve=on_approve,
+            on_reject=on_reject,
+        )
+        dialog.present(self.get_root())
+        self._last_dialog = dialog
+
+    def approve_proposal(self, proposal_id: str) -> None:
+        if self._project is None or self.brain is None:
+            return
+        try:
+            self.brain.approve_proposal(self._project, proposal_id)
+            self.nav.toast("Propuesta aprobada e incorporada a la memoria")
+        except BrainError as exc:
+            self.nav.toast(str(exc))
+
+    def reject_proposal(self, proposal_id: str) -> None:
+        if self._project is None or self.brain is None:
+            return
+        alert = Adw.AlertDialog(
+            heading="¿Rechazar propuesta?",
+            body="La propuesta se marcará como rechazada y no se modificará la memoria del proyecto.",
+        )
+        alert.add_response("cancel", "Cancelar")
+        alert.add_response("reject", "Rechazar")
+        alert.set_response_appearance("reject", Adw.ResponseAppearance.DESTRUCTIVE)
+        alert.set_default_response("cancel")
+        alert.set_close_response("cancel")
+
+        def on_response(_d: Adw.AlertDialog, response: str) -> None:
+            if response == "reject":
+                self._do_reject_proposal(proposal_id, "")
+
+        alert.connect("response", on_response)
+        alert.present(self.get_root())
+
+    def _do_reject_proposal(self, proposal_id: str, note: str) -> None:
+        if self._project is None or self.brain is None:
+            return
+        try:
+            self.brain.reject_proposal(self._project, proposal_id, note=note)
+            self.nav.toast("Propuesta rechazada")
+        except BrainError as exc:
+            self.nav.toast(str(exc))
 

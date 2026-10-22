@@ -128,11 +128,55 @@ class BrainStore:
             raise UnsafePathError("INDEX.md no puede ser un enlace simbólico.")
         if path.is_file() and path.read_text(encoding="utf-8") == text:
             return False
-        fd, tmp = tempfile.mkstemp(prefix=".tmp-", suffix=".md", dir=root)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
-        os.replace(tmp, path)
+        path.write_text(text, encoding="utf-8")
         return True
+
+    # ---- propuestas de actualización (.proposals) -----------------------------------
+
+    def proposals_root(self, project_key: str) -> Path:
+        return self.scope_root(Scope.PROJECT, project_key) / ".proposals"
+
+    def ensure_proposals_root(self, project_key: str) -> Path:
+        self.ensure_root(Scope.PROJECT, project_key)
+        p_root = self.proposals_root(project_key)
+        if p_root.is_symlink():
+            raise UnsafePathError("La carpeta de propuestas no puede ser un enlace simbólico.")
+        if not self.readonly:
+            p_root.mkdir(parents=True, exist_ok=True)
+        return p_root
+
+    def resolve_proposal(self, project_key: str, proposal_id: str) -> Path:
+        if not re.fullmatch(r"p-[a-z0-9]{8,16}", proposal_id):
+            raise UnsafePathError("Identificador de propuesta no válido.")
+        p_root = self.ensure_proposals_root(project_key)
+        target = p_root / f"{proposal_id}.md"
+        if target.is_symlink():
+            raise UnsafePathError("El archivo de propuesta no puede ser un enlace simbólico.")
+        return target
+
+    def write_proposal_text(self, project_key: str, proposal_id: str, text: str) -> Path:
+        self._check_writable()
+        path = self.resolve_proposal(project_key, proposal_id)
+        temp = path.with_suffix(".tmp")
+        try:
+            temp.write_text(text, encoding="utf-8")
+            temp.replace(path)
+        except Exception:
+            temp.unlink(missing_ok=True)
+            raise
+        return path
+
+    def read_proposal_text(self, project_key: str, proposal_id: str) -> str:
+        path = self.resolve_proposal(project_key, proposal_id)
+        try:
+            return path.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise BrainError("El archivo de la propuesta no existe.") from exc
+
+    def delete_proposal_file(self, project_key: str, proposal_id: str) -> None:
+        self._check_writable()
+        path = self.resolve_proposal(project_key, proposal_id)
+        path.unlink(missing_ok=True)
 
     def move_to_trash(self, scope: Scope, project_key: str, relpath: str) -> Path:
         """Elimina un documento moviéndolo a la papelera de la memoria (recuperable)."""

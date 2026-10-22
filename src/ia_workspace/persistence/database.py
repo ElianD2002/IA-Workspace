@@ -133,6 +133,35 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         "CREATE UNIQUE INDEX retired_memories_pending ON retired_memories(memory_key) WHERE recovered_at IS NULL",
         "CREATE INDEX retired_memories_path ON retired_memories(path)",
     ),
+    # 6 — Propuestas de actualización del Cerebro Compartido (fase 3C.1).
+    #     Permite a los agentes (Claude Code, OpenAI Codex, Google Antigravity) proponer
+    #     nuevos conocimientos o modificaciones de documentos Markdown existentes sin
+    #     escribir directamente en la memoria oficial. El usuario revisa y aprueba o
+    #     rechaza cada propuesta desde la interfaz de IA Workspace.
+    (
+        """
+        CREATE TABLE brain_proposals (
+            id            TEXT PRIMARY KEY,
+            project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            project_key   TEXT    NOT NULL,
+            agent_kind    TEXT    NOT NULL DEFAULT '',
+            operation     TEXT    NOT NULL,
+            relpath       TEXT    NOT NULL,
+            title         TEXT    NOT NULL,
+            category      TEXT    NOT NULL,
+            module        TEXT    NOT NULL DEFAULT '',
+            tags          TEXT    NOT NULL DEFAULT '',
+            summary       TEXT    NOT NULL DEFAULT '',
+            base_hash     TEXT    NOT NULL DEFAULT '',
+            status        TEXT    NOT NULL DEFAULT 'pending',
+            created_at    TEXT    NOT NULL,
+            reviewed_at   TEXT,
+            review_note   TEXT    NOT NULL DEFAULT ''
+        )
+        """,
+        "CREATE INDEX brain_proposals_project_status ON brain_proposals(project_id, status)",
+        "CREATE INDEX brain_proposals_created ON brain_proposals(project_id, created_at DESC)",
+    ),
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

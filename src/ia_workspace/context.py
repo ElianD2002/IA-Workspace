@@ -28,12 +28,14 @@ from ia_workspace.sessions.manager import Dispatch, Schedule, SessionManager, _d
 
 def build_brain(db: Database, paths: AppPaths) -> BrainService:
     """Cerebro compartido en ``<datos>/brain`` (XDG al estar instalada; ``var/`` desde el código)."""
+    from ia_workspace.brain.proposals import ProposalRepository
     projects = ProjectRepository(db)
     return BrainService(
         paths.data_dir / "brain",
         BrainIndex(db.conn),
         BrainProjectRepository(db),
         project_name=lambda pid: (p.name if (p := projects.get(pid)) is not None else None),
+        proposals=ProposalRepository(db),
     )
 
 

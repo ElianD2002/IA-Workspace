@@ -24,6 +24,11 @@ from ia_workspace.brain.model import (
     slugify,
     summarize,
 )
+from ia_workspace.brain.proposals import (
+    BrainConflictError,
+    ProposalOperation,
+    ProposalStatus,
+)
 from ia_workspace.brain.service import BrainService
 from ia_workspace.brain.store import BrainStore, UnsafePathError
 from ia_workspace.config import AppPaths
@@ -621,11 +626,276 @@ class MigrationV4Tests(unittest.TestCase):
             self.assertEqual(db.conn.execute("SELECT COUNT(*) FROM retired_memories").fetchone()[0], 0)
             db.close()
 
+    def test_v5_database_migrates_to_v6_keeping_data(self) -> None:
+        with temp_dir() as tmp:
+            path = Path(tmp) / "v5.db"
+            conn = sqlite3.connect(path)
+            for migration in MIGRATIONS[:5]:
+                for statement in migration:
+                    conn.execute(statement)
+            conn.execute("PRAGMA user_version = 5")
+            conn.execute("INSERT INTO projects (name, path, color_index, agents, created_at) "
+                         "VALUES ('Migrado', '/migrado', 0, '[]', '2026-10-01T10:00:00+00:00')")
+            conn.execute("INSERT INTO brain_projects VALUES (1, 'migrado-0123456789ab', '2026-10-01T10:00:00+00:00')")
+            conn.commit()
+            conn.close()
+            db = Database(path)
+            self.assertEqual(db.version, SCHEMA_VERSION)
+            self.assertEqual(SCHEMA_VERSION, 6)
+            self.assertEqual(db.conn.execute("SELECT memory_key FROM brain_projects").fetchone()[0],
+                             "migrado-0123456789ab")
+            self.assertEqual(db.conn.execute("SELECT COUNT(*) FROM brain_proposals").fetchone()[0], 0)
+            self.assertEqual(db.conn.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            db.close()
+
     def test_no_credential_or_content_columns(self) -> None:
         db = Database(":memory:")
-        for table in ("brain_projects", "brain_documents", "retired_memories"):
+        for table in ("brain_projects", "brain_documents", "retired_memories", "brain_proposals"):
             columns = [c[1].lower() for c in db.conn.execute(f"PRAGMA table_info({table})")]
             self.assertFalse([c for c in columns if any(f in c for f in ("token", "secret", "password", "body"))])
+
+
+class ProposalTests(BrainCase):
+    def test_propose_create_and_isolation(self) -> None:
+        meta = self.brain.propose(
+            self.a,
+            "create",
+            title="ADR-007 Nueva API",
+            body="Detalle de la arquitectura de la API.",
+            category_key="decisiones",
+            tags=("api", "v2"),
+            summary="Propuesta de API v2",
+            agent_kind="claude-code",
+        )
+        self.assertTrue(meta.id.startswith("p-"))
+        self.assertEqual(meta.status, ProposalStatus.PENDING)
+        self.assertEqual(meta.operation, ProposalOperation.CREATE)
+        self.assertEqual(meta.category, "decisiones")
+        self.assertEqual(meta.relpath, "decisiones/adr-007-nueva-api.md")
+
+        prop_file = self.brain.root / "projects" / self.ka / ".proposals" / f"{meta.id}.md"
+        self.assertTrue(prop_file.is_file())
+        content = prop_file.read_text(encoding="utf-8")
+        self.assertIn("operation: create", content)
+        self.assertIn("Detalle de la arquitectura de la API.", content)
+
+        # Aislamiento: NO aparece en INDEX.md, ni en list, ni en search
+        self.brain.sync(Scope.PROJECT, self.ka)
+        index_text = self.brain.index_path(Scope.PROJECT, self.ka).read_text(encoding="utf-8")
+        self.assertNotIn("ADR-007 Nueva API", index_text)
+        self.assertNotIn("adr-007-nueva-api.md", index_text)
+        self.assertEqual(self.brain.list(Scope.PROJECT, self.ka, "decisiones"), [])
+        self.assertEqual(self.brain.search(Scope.PROJECT, self.ka, "arquitectura"), [])
+
+        # Aislamiento entre proyectos
+        self.assertEqual(self.brain.list_proposals(self.b.id), [])
+        proposals_a = self.brain.list_proposals(self.a.id)
+        self.assertEqual(len(proposals_a), 1)
+        self.assertEqual(proposals_a[0].id, meta.id)
+        self.assertEqual(self.brain.count_pending_proposals(self.a.id), 1)
+
+    def test_approve_create_proposal(self) -> None:
+        meta = self.brain.propose(
+            self.a,
+            "create",
+            title="Convenciones de código",
+            body="Usar PEP 8 y anotaciones de tipo estrictas.",
+            category_key="reglas",
+            tags="pep8, typing",
+        )
+        doc = self.brain.approve_proposal(self.a, meta.id)
+        self.assertEqual(doc.title, "Convenciones de código")
+        self.assertTrue((self.brain.root / "projects" / self.ka / "reglas" / "convenciones-de-codigo.md").is_file())
+        index_text = self.brain.index_path(Scope.PROJECT, self.ka).read_text(encoding="utf-8")
+        self.assertIn("Convenciones de código", index_text)
+        self.assertEqual(len(self.brain.search(Scope.PROJECT, self.ka, "estrictas")), 1)
+        self.assertEqual(self.brain.count_pending_proposals(self.a.id), 0)
+        updated = self.brain.get_proposal(self.a, meta.id)
+        self.assertEqual(updated.meta.status, ProposalStatus.APPROVED)
+
+    def test_reject_proposal_keeps_memory_clean(self) -> None:
+        meta = self.brain.propose(
+            self.a,
+            "create",
+            title="Propuesta rechazada",
+            body="No debería quedar en la memoria.",
+            category_key="estado",
+        )
+        self.brain.reject_proposal(self.a, meta.id, note="No aplica actualmente")
+        self.assertEqual(self.brain.count_pending_proposals(self.a.id), 0)
+        self.assertFalse((self.brain.root / "projects" / self.ka / "estado" / "propuesta-rechazada.md").exists())
+        updated = self.brain.get_proposal(self.a, meta.id)
+        self.assertEqual(updated.meta.status, ProposalStatus.REJECTED)
+        self.assertEqual(updated.meta.review_note, "No aplica actualmente")
+
+    def test_propose_update_and_conflict_detection(self) -> None:
+        orig_doc = self.add(self.ka, "decisiones", "Base de datos", "Usamos SQLite.")
+        relpath = orig_doc.relpath
+
+        meta = self.brain.propose(
+            self.a,
+            "update",
+            title="Base de datos",
+            body="Usamos SQLite con WAL y foreign keys activadas.",
+            relpath=relpath,
+            agent_kind="codex",
+        )
+        self.assertEqual(meta.operation, ProposalOperation.UPDATE)
+        self.assertTrue(len(meta.base_hash) > 10)
+
+        # Modificación concurrente del documento original
+        self.brain.update(Scope.PROJECT, self.ka, relpath, "Base de datos", "Usamos PostgreSQL en su lugar.")
+
+        # Al intentar aprobar detecta conflicto
+        with self.assertRaises(BrainConflictError):
+            self.brain.approve_proposal(self.a, meta.id)
+
+        updated = self.brain.get_proposal(self.a, meta.id)
+        self.assertEqual(updated.meta.status, ProposalStatus.CONFLICT)
+        current_doc = self.brain.read(Scope.PROJECT, self.ka, relpath)
+        self.assertIn("PostgreSQL", current_doc.body)
+
+    def test_secret_protection_in_proposals(self) -> None:
+        with self.assertRaises(BrainError) as ctx:
+            self.brain.propose(
+                self.a,
+                "create",
+                title="Claves secretas",
+                body="token: ghp_" + "A" * 36,
+                category_key="estado",
+            )
+        self.assertIn("token", str(ctx.exception).lower())
+        self.assertEqual(self.brain.count_pending_proposals(self.a.id), 0)
+
+    def test_unsafe_paths_and_limits_rejected(self) -> None:
+        with self.assertRaises(UnsafePathError):
+            self.brain.propose(
+                self.a,
+                "create",
+                title="Escape",
+                body="intento de escape",
+                relpath="../fuera.md",
+                category_key="estado",
+            )
+        with self.assertRaises(BrainError):
+            self.brain.propose(
+                self.a,
+                "create",
+                title="Gigante",
+                body="A" * (MAX_DOCUMENT_BYTES + 1024),
+                category_key="estado",
+            )
+
+    def test_cli_propose_stdin_and_file(self) -> None:
+        sub = self.data / "alfa" / "sub"
+        sub.mkdir(parents=True)
+
+        out, err = io.StringIO(), io.StringIO()
+        stdin = io.StringIO("Lineamientos de arquitectura inicial.\n")
+        with mock.patch.dict(os.environ, {"IAW_DATA_DIR": str(self.data)}):
+            code = cli.main(
+                ["propose", "--category", "arquitectura", "--title", "Arquitectura inicial", "--json"],
+                cwd=sub,
+                out=out,
+                err=err,
+                stdin=stdin,
+            )
+        self.assertEqual(code, 0)
+        self.assertIn('"status": "pending"', out.getvalue())
+        self.assertEqual(self.brain.count_pending_proposals(self.a.id), 1)
+
+        file_path = sub / "propuesta.md"
+        file_path.write_text("Nueva política de commits.\n", encoding="utf-8")
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"IAW_DATA_DIR": str(self.data)}):
+            code = cli.main(
+                ["propose", "--category", "reglas", "--title", "Commits", "--file", str(file_path)],
+                cwd=sub,
+                out=out,
+                err=err,
+            )
+        self.assertEqual(code, 0)
+        self.assertIn("Propuesta registrada", out.getvalue())
+        self.assertEqual(self.brain.count_pending_proposals(self.a.id), 2)
+
+    def test_cannot_approve_twice_or_reject_approved(self) -> None:
+        meta1 = self.brain.propose(
+            self.a, "create", title="Doc 1", body="Contenido 1", category_key="estado"
+        )
+        self.brain.approve_proposal(self.a, meta1.id)
+        with self.assertRaises(BrainError) as ctx:
+            self.brain.approve_proposal(self.a, meta1.id)
+        self.assertIn("ya fue revisada", str(ctx.exception))
+        with self.assertRaises(BrainError) as ctx:
+            self.brain.reject_proposal(self.a, meta1.id)
+        self.assertIn("ya fue revisada", str(ctx.exception))
+
+        meta2 = self.brain.propose(
+            self.a, "create", title="Doc 2", body="Contenido 2", category_key="estado"
+        )
+        self.brain.reject_proposal(self.a, meta2.id)
+        with self.assertRaises(BrainError) as ctx:
+            self.brain.approve_proposal(self.a, meta2.id)
+        self.assertIn("ya fue revisada", str(ctx.exception))
+        with self.assertRaises(BrainError) as ctx:
+            self.brain.reject_proposal(self.a, meta2.id)
+        self.assertIn("ya fue revisada", str(ctx.exception))
+
+    def test_create_proposal_cannot_overwrite_existing_document(self) -> None:
+        meta = self.brain.propose(
+            self.a, "create", title="Arquitectura Base", body="Propuesta inicial.", category_key="arquitectura"
+        )
+        # Se crea concurrentemente el documento oficial antes de aprobar
+        self.add(self.ka, "arquitectura", "Arquitectura Base", "Documento oficial ya existente.")
+
+        with self.assertRaises(BrainConflictError):
+            self.brain.approve_proposal(self.a, meta.id)
+
+        # La propuesta pasa a conflicto y el documento oficial conserva su contenido
+        updated_prop = self.brain.get_proposal(self.a, meta.id)
+        self.assertEqual(updated_prop.meta.status, ProposalStatus.CONFLICT)
+        doc = self.brain.read(Scope.PROJECT, self.ka, meta.relpath)
+        self.assertEqual(doc.body.strip(), "Documento oficial ya existente.")
+
+    def test_sync_reconciles_proposals_bidirectionally(self) -> None:
+        prop_id = "p-reconcile01"
+        p_root = self.brain.store.ensure_proposals_root(self.ka)
+        p_file = p_root / f"{prop_id}.md"
+        p_file.write_text(
+            "---\n"
+            f"id: {prop_id}\n"
+            "operation: create\n"
+            "status: pending\n"
+            "category: estado\n"
+            "title: Recuperado de disco\n"
+            "relpath: estado/recuperado-de-disco.md\n"
+            "---\n\n"
+            "Cuerpo restaurado directamente en disco.\n",
+            encoding="utf-8",
+        )
+
+        # Sincronización detecta el archivo en disco e indexa en SQLite
+        self.brain.sync(Scope.PROJECT, self.ka)
+        prop = self.brain.get_proposal(self.a, prop_id)
+        self.assertEqual(prop.meta.title, "Recuperado de disco")
+        self.assertEqual(prop.meta.status, ProposalStatus.PENDING)
+
+        # Si el archivo se elimina de disco, sync limpia la fila huérfana de SQLite
+        p_file.unlink()
+        self.brain.sync(Scope.PROJECT, self.ka)
+        with self.assertRaises(BrainError):
+            self.brain.get_proposal(self.a, prop_id)
+
+    def test_atomic_rollback_on_propose_failure(self) -> None:
+        with mock.patch.object(self.brain._proposals, "add", side_effect=sqlite3.OperationalError("disk error")):
+            with self.assertRaises(sqlite3.OperationalError):
+                self.brain.propose(
+                    self.a, "create", title="Fallo simulado", body="Texto", category_key="estado"
+                )
+        # Comprobar que no quedó ningún archivo huérfano en .proposals/
+        p_root = self.brain.store.proposals_root(self.ka)
+        files = list(p_root.glob("p-*.md")) if p_root.is_dir() else []
+        self.assertEqual(files, [])
 
 
 if __name__ == "__main__":

@@ -73,6 +73,7 @@ run_ui_test test_icon_ui "Icono oficial en GTK"
 run_ui_test test_chatgpt_web_ui "ChatGPT integrado (WebKitGTK, sitio simulado)"
 run_ui_test test_brain_ui "Cerebro compartido"
 run_ui_test test_brain_bridge_ui "Puente de contexto del Cerebro a agentes"
+run_ui_test test_brain_proposals_ui "Propuestas del Cerebro"
 run_ui_test test_clipboard "Portapapeles y menús contextuales"
 
 # Ningún dato de cuenta (de los dobles de prueba) debe acabar en registros.

@@ -72,6 +72,23 @@ def _parser() -> argparse.ArgumentParser:
     read = sub.add_parser("read", parents=[common], help="lee un documento")
     read.add_argument("relpath")
     read.add_argument("--max-chars", type=int, default=0)
+    propose = sub.add_parser("propose", help="propone una actualización a la memoria del proyecto")
+    propose.add_argument(
+        "--operation",
+        "-o",
+        choices=["create", "update"],
+        default=None,
+        help="operación: create (nuevo) o update (actualizar existente)",
+    )
+    propose.add_argument("--relpath", help="ruta relativa del documento en la memoria (ej. decisiones/fechas.md)")
+    propose.add_argument("--category", help="categoría de la memoria (para create)")
+    propose.add_argument("--title", help="título del documento o propuesta")
+    propose.add_argument("--summary", default="", help="resumen o justificación del cambio propuesto")
+    propose.add_argument("--tags", default="", help="etiquetas separadas por coma")
+    propose.add_argument("--module", default="", help="módulo (para documentos modulares)")
+    propose.add_argument("--agent", default="", help="agente que origina la propuesta (opcional)")
+    propose.add_argument("--file", help="archivo Markdown con el contenido propuesto (por defecto lee de stdin)")
+    propose.add_argument("--json", action="store_true", help="salida en JSON")
     return parser
 
 
@@ -81,15 +98,109 @@ def _meta_dict(meta) -> dict:
             "updated": meta.updated.isoformat() if meta.updated else None}
 
 
-def main(argv: list[str] | None = None, cwd: Path | None = None, out=sys.stdout, err=sys.stderr) -> int:
+def main(
+    argv: list[str] | None = None,
+    cwd: Path | None = None,
+    out=sys.stdout,
+    err=sys.stderr,
+    stdin=sys.stdin,
+) -> int:
     args = _parser().parse_args(argv)
     from ia_workspace.config import resolve_paths
-    from ia_workspace.context import build_readonly_brain
 
     paths = resolve_paths()
     if not paths.database.is_file():
         print("No hay datos de IA Workspace en este equipo.", file=err)
         return EXIT_ERROR
+
+    if args.command == "propose":
+        from ia_workspace.context import build_brain
+        from ia_workspace.persistence.database import Database
+        from ia_workspace.persistence.repositories import ProjectRepository
+
+        try:
+            db = Database(paths.database)
+        except (sqlite3.OperationalError, OSError) as exc:
+            print(
+                f"No se pudo abrir la base de datos de IA Workspace para registrar la propuesta: {exc}\n"
+                "Si el agente corre en un sandbox estricto, puede no tener permiso de escritura fuera del proyecto.",
+                file=err,
+            )
+            return EXIT_ERROR
+
+        try:
+            projects_repo = ProjectRepository(db)
+            project = find_project(projects_repo.list(), cwd or Path.cwd())
+            if project is None:
+                print(
+                    "Esta carpeta no pertenece a ningún proyecto de IA Workspace.",
+                    file=err,
+                )
+                return EXIT_NO_PROJECT
+
+            if args.file:
+                file_path = Path(args.file)
+                if not file_path.is_file():
+                    print(f"El archivo «{args.file}» no existe.", file=err)
+                    return EXIT_ERROR
+                body = file_path.read_text(encoding="utf-8")
+            else:
+                body = stdin.read()
+
+            if not body.strip():
+                print("El contenido propuesto está vacío.", file=err)
+                return EXIT_ERROR
+
+            brain = build_brain(db, paths)
+            operation = args.operation
+            if not operation:
+                proj_key = brain.project_key(project)
+                if args.relpath and brain.store.exists(Scope.PROJECT, proj_key, args.relpath):
+                    operation = "update"
+                else:
+                    operation = "create"
+
+            meta = brain.propose(
+                project=project,
+                operation=operation,
+                title=args.title or "",
+                body=body,
+                relpath=args.relpath,
+                category_key=args.category,
+                module=args.module or "",
+                tags=args.tags or "",
+                summary=args.summary or "",
+                agent_kind=args.agent or "",
+            )
+
+            if args.json:
+                data = {
+                    "id": meta.id,
+                    "status": meta.status.value,
+                    "operation": meta.operation.value,
+                    "relpath": meta.relpath,
+                    "title": meta.title,
+                    "category": meta.category,
+                    "created_at": meta.created_at.isoformat(),
+                    "summary": meta.summary,
+                }
+                print(json.dumps(data, ensure_ascii=False), file=out)
+            else:
+                print(
+                    f"Propuesta registrada [{meta.id}]: «{meta.title}» ({meta.relpath}) · "
+                    f"Estado: {meta.status.label}. "
+                    "Pendiente de revisión y aprobación por el usuario en IA Workspace.",
+                    file=out,
+                )
+            return 0
+        except BrainError as exc:
+            print(str(exc), file=err)
+            return EXIT_ERROR
+        finally:
+            db.close()
+
+    from ia_workspace.context import build_readonly_brain
+
     try:
         brain, projects, close = build_readonly_brain(paths)
     except (sqlite3.Error, RuntimeError) as exc:
