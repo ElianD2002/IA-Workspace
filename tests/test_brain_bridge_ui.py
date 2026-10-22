@@ -192,7 +192,7 @@ class BrainBridgeUITest(unittest.TestCase):
                 check(len(args_alfa) == 2, f"Claude en Alfa: se esperaban 2 argumentos, hubo {len(args_alfa)}")
                 check(args_alfa[0] == "--append-system-prompt", f"falta --append-system-prompt: {args_alfa}")
                 check("iaw-brain" in args_alfa[1] and "read <ruta-relativa>" in args_alfa[1], f"la referencia no contiene iaw-brain: {args_alfa[1]}")
-                check(len(args_alfa[1]) < 600, f"la referencia supera los 600 caracteres: len={len(args_alfa[1])}")
+                check(len(args_alfa[1]) < 850, f"la referencia supera los 850 caracteres: len={len(args_alfa[1])}")
                 check(session(c_alfa).spec.brain.status is BrainLinkStatus.APPLIED, "Alfa no reportó APPLIED")
 
                 # Comprobamos que una entrada posterior no repita la referencia

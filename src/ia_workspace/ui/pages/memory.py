@@ -85,12 +85,12 @@ class MemoryPage(Page):
         clamp = Adw.Clamp(maximum_size=900, child=body)
         content = Gtk.ScrolledWindow(child=clamp, hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
 
-        self.split = Adw.OverlaySplitView(sidebar=nav_scroll, content=content, min_sidebar_width=210,
+        self.split = Adw.OverlaySplitView(sidebar=nav_scroll, content=content, min_sidebar_width=200,
                                           max_sidebar_width=260)
         self.split.bind_property("show-sidebar", self.categories_button, "active",
                                  GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE)
         bin_ = Adw.BreakpointBin(child=self.split, width_request=360, height_request=320)
-        narrow = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 720sp"))
+        narrow = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 860sp"))
         narrow.add_setter(self.split, "collapsed", True)
         narrow.add_setter(self.categories_button, "visible", True)
         bin_.add_breakpoint(narrow)

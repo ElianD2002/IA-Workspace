@@ -12,11 +12,14 @@ Comprueba:
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import time
 import traceback
 import unittest
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
 
 from helpers import temp_dir
 
@@ -101,22 +104,67 @@ class BrainProposalsUITest(unittest.TestCase):
                         "Usar memoria local.",
                     )
 
-                    # 2. Registrar propuesta de actualización desde un agente
-                    prop = ctx.brain.propose(
-                        proj,
-                        "update",
-                        title="Estrategia de caché",
-                        body="Usar Redis centralizado con fallback a memoria local.",
-                        relpath="decisiones/estrategia-de-cache.md",
-                        summary="Mejora de escalabilidad horizontal",
-                        agent_kind="antigravity",
-                    )
+                    # 2. Registrar propuesta de actualización desde un proceso independiente (CLI externa)
+                    ws_view = win._workspaces[proj.id]
+                    check(not ws_view._proposals_button.get_visible(), "el botón de propuestas debe estar oculto con 0 pendientes")
 
-                    # 3. Navegar a la pantalla de memoria
-                    win.navigate("memory")
+                    sub_env = dict(
+                        os.environ,
+                        IAW_DATA_DIR=str(data),
+                        PYTHONPATH=str(ROOT / "src"),
+                    )
+                    proc = subprocess.run(
+                        [
+                            sys.executable,
+                            "-m",
+                            "ia_workspace.brain",
+                            "propose",
+                            "-o",
+                            "update",
+                            "--relpath",
+                            "decisiones/estrategia-de-cache.md",
+                            "--title",
+                            "Estrategia de caché",
+                            "--summary",
+                            "Mejora de escalabilidad horizontal",
+                        ],
+                        input="Usar Redis centralizado con fallback a memoria local.",
+                        text=True,
+                        cwd=str(folder),
+                        env=sub_env,
+                        capture_output=True,
+                    )
+                    check(proc.returncode == 0, f"falló iaw-brain propose externo: {proc.stderr}")
+                    pump(timeout=0.3)
+
+                    # Indicador discreto en el workspace (detectado desde proceso externo)
+                    check(ws_view._proposals_button.get_visible(), "el botón de propuestas debe ser visible con 1 pendiente tras proceso externo")
+                    check(ws_view._proposals_label.get_label() == "1", "el botón de propuestas debe mostrar 1")
+
+                    # Comprobar cambio de proyecto: en otro proyecto el botón no debe aparecer
+                    beta_folder = Path(folders) / "proyecto-beta"
+                    beta_folder.mkdir(parents=True, exist_ok=True)
+                    proj_beta = ctx.projects.register("Proyecto Beta", str(beta_folder), ())
+                    win.open_project(proj_beta.id)
+                    pump(timeout=0.2)
+                    ws_view_beta = win._workspaces[proj_beta.id]
+                    check(not ws_view_beta._proposals_button.get_visible(), "el botón de propuestas debe estar oculto en Proyecto Beta")
+
+                    # Volver al proyecto original: el botón reaparece con su contador
+                    win.open_project(proj.id)
+                    pump(timeout=0.2)
+                    check(ws_view._proposals_button.get_visible(), "el botón de propuestas debe reaparecer al volver a Proyecto Alfa")
+                    check(ws_view._proposals_label.get_label() == "1", "el botón de propuestas debe mantener 1 en Alfa")
+
+                    pending_props = ctx.brain.list_proposals(proj.id)
+                    check(len(pending_props) == 1, f"esperada 1 propuesta en base de datos, obtenidas {len(pending_props)}")
+                    prop = pending_props[0]
+
+                    # 3. Navegar a la pantalla de memoria mediante el botón discreto del workspace
+                    ws_view._proposals_button.emit("clicked")
                     page = win._pages["memory"]
                     pump(timeout=0.2)
-                    check(win._stack.get_visible_child_name() == "memory", "no se abrió memoria")
+                    check(page.category_key == "__proposals__", "no se seleccionó la categoría de propuestas")
 
                     # Comprobar fila de propuestas y contador
                     check(page._proposals_row is not None, "falta la fila de propuestas")
@@ -144,26 +192,46 @@ class BrainProposalsUITest(unittest.TestCase):
                     updated_doc = ctx.brain.read(Scope.PROJECT, key, "decisiones/estrategia-de-cache.md")
                     check("Redis centralizado" in updated_doc.body, "no se aplicó el contenido propuesto")
                     check(ctx.brain.count_pending_proposals(proj.id) == 0, "quedan propuestas pendientes")
+                    check(not ws_view._proposals_button.get_visible(), "el botón de propuestas debe ocultarse tras aprobar")
                     stored_prop = ctx.brain.get_proposal(proj, prop.id)
                     check(stored_prop.meta.status is ProposalStatus.APPROVED, "el estado no es APPROVED")
 
-                    # 7. Probar flujo de rechazo con una segunda propuesta
-                    prop2 = ctx.brain.propose(
-                        proj,
-                        "create",
-                        title="Documento a rechazar",
-                        body="Contenido prescindible.",
-                        category_key="estado",
-                        summary="Prueba de rechazo",
-                        agent_kind="codex",
+                    # 7. Probar flujo de rechazo con una segunda propuesta registrada por proceso externo
+                    proc2 = subprocess.run(
+                        [
+                            sys.executable,
+                            "-m",
+                            "ia_workspace.brain",
+                            "propose",
+                            "-o",
+                            "create",
+                            "--category",
+                            "estado",
+                            "--title",
+                            "Documento a rechazar",
+                            "--summary",
+                            "Prueba de rechazo",
+                        ],
+                        input="Contenido prescindible.",
+                        text=True,
+                        cwd=str(folder),
+                        env=sub_env,
+                        capture_output=True,
                     )
+                    check(proc2.returncode == 0, f"falló segunda propuesta externa: {proc2.stderr}")
+                    pump(timeout=0.3)
+                    check(ws_view._proposals_button.get_visible(), "el botón de propuestas debe mostrarse tras segunda propuesta")
+                    check(ws_view._proposals_label.get_label() == "1", "el botón de propuestas debe mostrar 1")
                     page.refresh()
                     pump(timeout=0.2)
                     check(ctx.brain.count_pending_proposals(proj.id) == 1, "debe haber 1 pendiente")
+                    pending2 = ctx.brain.list_proposals(proj.id)
+                    prop2 = pending2[0]
                     # Rechazar directamente
                     page._do_reject_proposal(prop2.id, "No se necesita actualmente")
                     pump(timeout=0.2)
                     check(ctx.brain.count_pending_proposals(proj.id) == 0, "no debe haber pendientes")
+                    check(not ws_view._proposals_button.get_visible(), "el botón de propuestas debe ocultarse tras rechazar")
                     prop2_stored = ctx.brain.get_proposal(proj, prop2.id)
                     check(prop2_stored.meta.status is ProposalStatus.REJECTED, "no se marcó como REJECTED")
 

@@ -68,7 +68,7 @@ class BrainBridgeLogicTests(unittest.TestCase):
         self.assertIs(link.status, BrainLinkStatus.APPLIED)
         self.assertTrue(link.via_launch)
         self.assertIsNotNone(link.launch_reference)
-        self.assertLess(len(link.launch_reference), 600)
+        self.assertLess(len(link.launch_reference), 850)
         self.assertIn("--append-system-prompt", link.detail)
 
         # Verificamos argumentos generados

@@ -27,6 +27,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+import shutil
 
 from ia_workspace.brain.model import (
     INDEX_FILENAME,
@@ -452,22 +453,36 @@ class BrainService:
 
     # ---- referencia para agentes ------------------------------------------------------------
 
-    def agent_brief(self, project: Project, command: str) -> str:
-        """Lo único que recibirá un agente al empezar: dónde está el índice y cómo consultar.
+    def agent_brief(self, project: Project, command: str = "") -> str:
+        """Lo único que recibirá un agente al empezar: dónde está el índice, cómo consultar y proponer.
 
-        Explica el uso de index, search y read recibiendo la ruta relativa de un documento específico.
-        Nunca incluye el contenido de la memoria (< 600 caracteres).
+        Explica index, search, read y cuándo sugerir cambios con propose (< 850 caracteres).
+        Nunca incluye el contenido de la memoria.
         """
         key = self.project_key(project)
         self.sync(Scope.PROJECT, key)
+        if not command or (command == "iaw-brain" and shutil.which("iaw-brain") is None):
+            from ia_workspace.brain.cli import cli_command
+            command = cli_command()
         return (
             f"Memoria de «{project.name}» (IA Workspace). Prohibido cargarla entera por defecto.\n"
             f"- Índice: {self.index_path(Scope.PROJECT, key)}\n"
             f"- CLI: {command}\n"
-            "  * index: ver índice | search \"<términos>\": buscar | read <ruta-relativa>: leer documento específico\n"
-            "  * propose: sugerir cambios a la memoria (el usuario los revisa y aprueba)\n"
+            '  * index: ver índice | search "<términos>": buscar | read <ruta-relativa>: leer documento específico\n'
+            '  * propose -o {create|update} [--relpath <ruta>] [--category <cat>] --title "<título>":\n'
+            "    Al cerrar un hito relevante (decisión técnica, módulo probado, fix clave o punto para retomar),\n"
+            "    propón datos con pruebas y pendientes. Evita tareas menores. Requiere aprobación humana.\n"
             "Ejecuta en la carpeta del proyecto: solo accede a su memoria y a la global."
         )
+
+    def sync_proposals(self, project: Project) -> int:
+        """Reconcilia propuestas en disco con la base de datos y notifica cambios a los suscriptores."""
+        key = self.existing_project_key(project.id)
+        if key and self._proposals is not None:
+            self._reconcile_proposals(project.id, key)
+            self._emit(Scope.PROJECT, key)
+            return self.count_pending_proposals(project.id)
+        return 0
 
     # ---- propuestas de actualización (fase 3C.1) ---------------------------------------
 

@@ -235,6 +235,7 @@ class MainWindow(Adw.ApplicationWindow):
             return GLib.SOURCE_REMOVE  # do_shutdown hará el guardado final
         for view in self._workspaces.values():
             view.save_state()
+            view._render_memory_hint()
         self.ctx.workspace.flush()
         return GLib.SOURCE_CONTINUE
 

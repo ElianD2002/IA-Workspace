@@ -79,6 +79,22 @@ class WorkspaceView(Page):
         folder = Gtk.Button(icon_name="folder-open-symbolic", tooltip_text="Abrir carpeta del proyecto")
         folder.connect("clicked", lambda _b: self._open_folder())
         self.header.pack_start(folder)
+
+        # Indicador discreto de propuestas del Cerebro pendientes (Fase 3C.2)
+        self._proposals_button = Gtk.Button(
+            tooltip_text="Propuestas de actualización de memoria pendientes · Clic para revisar",
+            visible=False,
+        )
+        self._proposals_button.add_css_class("flat")
+        badge_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        badge_box.append(Gtk.Image.new_from_icon_name("document-send-symbolic"))
+        self._proposals_label = Gtk.Label(label="0")
+        badge_box.append(self._proposals_label)
+        self._proposals_button.set_child(badge_box)
+        self._proposals_button.connect("clicked", lambda _b: self._open_proposals())
+        self.header.pack_start(self._proposals_button)
+        self._proposals_monitor = None
+
         # Con la ventana estrecha el panel ChatGPT se oculta: este botón abre su vista ampliada.
         self._chat_header_button = Gtk.Button(icon_name="user-available-symbolic", visible=False,
                                               tooltip_text="ChatGPT (vista ampliada)")
@@ -217,6 +233,34 @@ class WorkspaceView(Page):
             self._chat_header_button.set_visible(
                 WEBKIT_AVAILABLE and self.state.show_chat and "show_chat" in self._narrow
             )
+
+    def _open_proposals(self) -> None:
+        self.nav.navigate("memory")
+        mem_page = getattr(self.nav, "_pages", {}).get("memory")
+        if mem_page is not None and hasattr(mem_page, "select_category"):
+            mem_page.select_category("__proposals__")
+
+    def _setup_proposals_monitor(self) -> None:
+        if self._proposals_monitor is not None:
+            return
+        brain = self.ctx.brain
+        if brain is None:
+            return
+        key = brain.existing_project_key(self.project.id)
+        if not key:
+            return
+        try:
+            p_dir = brain.store.ensure_proposals_root(key)
+            gfile = Gio.File.new_for_path(str(p_dir))
+            self._proposals_monitor = gfile.monitor_directory(Gio.FileMonitorFlags.NONE, None)
+            self._proposals_monitor.connect("changed", self._on_proposals_changed)
+        except Exception:
+            self._proposals_monitor = None
+
+    def _on_proposals_changed(self, _monitor, _file, _other_file, _event_type) -> None:
+        if self.ctx.brain is not None:
+            self.ctx.brain.sync_proposals(self.project)
+        self._render_memory_hint()
 
     def _reset_layout(self) -> None:
         for key, _label, _icon in PANELS:
@@ -1286,6 +1330,14 @@ class WorkspaceView(Page):
         self._memory_hint.set_wrap(True)
         self._memory_hint.set_ellipsize(Pango.EllipsizeMode.NONE)
         memory.append(self._memory_hint)
+        self._proposals_link = Gtk.Button(
+            label="Revisar propuestas pendientes…",
+            halign=Gtk.Align.START,
+            visible=False,
+        )
+        self._proposals_link.add_css_class("flat")
+        self._proposals_link.connect("clicked", lambda _b: self._open_proposals())
+        memory.append(self._proposals_link)
         brain = Gtk.Button(label="Abrir Cerebro compartido", halign=Gtk.Align.START)
         brain.add_css_class("flat")
         brain.connect("clicked", lambda _b: self.nav.navigate("memory"))
@@ -1302,7 +1354,7 @@ class WorkspaceView(Page):
         return pane
 
     def _render_memory_hint(self) -> None:
-        """Cuántos documentos tiene la memoria de este proyecto (sin crearla si aún no existe)."""
+        """Cuántos documentos tiene la memoria de este proyecto y propuestas pendientes."""
         brain = self.ctx.brain
         key = brain.existing_project_key(self.project.id) if brain is not None else None
         total = sum(brain.counts(Scope.PROJECT, key).values()) if key else 0
@@ -1313,6 +1365,22 @@ class WorkspaceView(Page):
             text = ("Este proyecto aún no tiene documentos en el Cerebro compartido: estado actual, "
                     "arquitectura, decisiones, reglas… Cada proyecto tiene su propia memoria.")
         self._memory_hint.set_label(text)
+
+        self._setup_proposals_monitor()
+        pending = brain.count_pending_proposals(self.project.id) if brain is not None else 0
+        if hasattr(self, "_proposals_button"):
+            self._proposals_button.set_visible(pending > 0)
+            if pending > 0:
+                self._proposals_label.set_label(str(pending))
+                self._proposals_button.set_tooltip_text(
+                    f"{pending} propuesta{'s' if pending != 1 else ''} pendiente{'s' if pending != 1 else ''} de revisión en el Cerebro · Clic para revisar"
+                )
+        if hasattr(self, "_proposals_link"):
+            self._proposals_link.set_visible(pending > 0)
+            if pending > 0:
+                self._proposals_link.set_label(
+                    f"Revisar {pending} propuesta{'s' if pending != 1 else ''} pendiente{'s' if pending != 1 else ''}…"
+                )
 
     def _on_transfers_changed(self, project_id: int) -> None:
         if project_id == self.project.id:  # nunca se mezclan tareas entre proyectos
@@ -1390,6 +1458,7 @@ class WorkspaceView(Page):
             self._context_files.append(w.info_row("No hay AGENTS.md, CLAUDE.md ni GEMINI.md en la carpeta."))
         self._render_sessions()
         self._render_tasks()
+        self._render_memory_hint()
 
     # ---- estado ---------------------------------------------------------------------
 

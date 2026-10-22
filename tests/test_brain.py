@@ -359,9 +359,16 @@ class AgentInterfaceTests(BrainCase):
         self.assertIn("search", brief)
         self.assertIn("read", brief)
         self.assertIn("<ruta-relativa>", brief)
+        self.assertIn("propose", brief)
+        self.assertIn("hito relevante", brief)
         self.assertNotIn("<ruta-del-índice>", brief)
         self.assertNotIn("Contenido privado", brief)
-        self.assertLess(len(brief), 600)
+        self.assertLess(len(brief), 850)
+
+        # Invocación sin comando explícito: resuelve automáticamente a cli_command()
+        brief_auto = self.brain.agent_brief(self.a)
+        self.assertIn("iaw-brain", brief_auto)
+        self.assertLess(len(brief_auto), 850)
 
     def run_cli(self, args: list[str], cwd: Path) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
@@ -407,6 +414,27 @@ class AgentInterfaceTests(BrainCase):
                                 capture_output=True, text=True, env=env, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("preferencias/idioma.md · Idioma", result.stdout)
+
+    def test_wrapper_script_runs_with_minimal_path_from_subdirectory(self) -> None:
+        self.add(self.ka, "decisiones", "Microservicio", "Usar gRPC.")
+        sub = self.data / "alfa" / "src" / "deep" / "nested"
+        sub.mkdir(parents=True)
+        minimal_env = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": os.environ.get("HOME", "/tmp"),
+            "IAW_DATA_DIR": str(self.data),
+        }
+        wrapper = ROOT / "scripts" / "iaw-brain"
+        result = subprocess.run(
+            [str(wrapper), "search", "grpc"],
+            cwd=sub,
+            capture_output=True,
+            text=True,
+            env=minimal_env,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Microservicio", result.stdout)
 
 
 class RecoveryTests(unittest.TestCase):

@@ -49,7 +49,10 @@ def find_project(projects, directory: Path):
         return None
     best = None
     for project in projects:
-        root = Path(project.path)
+        try:
+            root = Path(project.path).resolve()
+        except OSError:
+            root = Path(project.path)
         if target == root or target.is_relative_to(root):
             if best is None or len(root.parts) > len(Path(best.path).parts):
                 best = project
