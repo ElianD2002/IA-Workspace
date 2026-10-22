@@ -42,7 +42,7 @@ echo "== Iconos generados a partir del original"
 python3 scripts/build_icons.py --check
 
 echo "== Pruebas de lógica"
-(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process test_agents test_fixes test_prompt_transfer test_icon test_web_policy test_brain test_brain_bridge test_autonomy test_quotas test_quota_refresh test_tasks)
+(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process test_agents test_fixes test_prompt_transfer test_icon test_web_policy test_brain test_brain_bridge test_autonomy test_quotas test_quota_refresh test_tasks test_prompt_templates)
 
 source "$ROOT/scripts/_broadway.sh"
 if start_broadway; then
@@ -80,6 +80,7 @@ run_ui_test test_home_ui "Rediseño del Inicio"
 run_ui_test test_catppuccin_copy "Catppuccin y Copiar al seleccionar en VTE"
 run_ui_test test_copy_on_select_ui "Copiar al seleccionar con ratón real y selector de Apariencia"
 run_ui_test test_tasks_ui "Tareas y prompts vinculados a agentes"
+run_ui_test test_prompt_templates_ui "Biblioteca de plantillas de prompts"
 
 # Ningún dato de cuenta (de los dobles de prueba) debe acabar en registros.
 if grep -rIl -E "persona@example\.invalid|FAKE-ORG-SECRET-123|sim_session_7f3a" "$ROOT/var"/*.log 2>/dev/null; then

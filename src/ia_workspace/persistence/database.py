@@ -236,6 +236,31 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         """,
         "CREATE INDEX task_history_task ON task_history(task_id, id)",
     ),
+    # 10 — Biblioteca de plantillas de prompts reutilizables (fase 6B.2).
+    #      Almacena plantillas con nombre, categoría, ámbito (global o por proyecto),
+    #      contenido con soporte de variables {{variable}} y marcas temporales.
+    (
+        """
+        CREATE TABLE prompt_templates (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT    NOT NULL CHECK (length(trim(name)) > 0),
+            description TEXT    NOT NULL DEFAULT '',
+            category    TEXT    NOT NULL DEFAULT 'General',
+            scope       TEXT    NOT NULL CHECK (scope IN ('global', 'project')),
+            project_id  INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+            content     TEXT    NOT NULL CHECK (length(trim(content)) > 0),
+            created_at  TEXT    NOT NULL,
+            updated_at  TEXT    NOT NULL,
+            CHECK (
+                (scope = 'global' AND project_id IS NULL) OR
+                (scope = 'project' AND project_id IS NOT NULL)
+            )
+        )
+        """,
+        "CREATE INDEX prompt_templates_scope ON prompt_templates(scope, project_id)",
+        "CREATE INDEX prompt_templates_category ON prompt_templates(category)",
+        "CREATE INDEX prompt_templates_updated ON prompt_templates(updated_at DESC)",
+    ),
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

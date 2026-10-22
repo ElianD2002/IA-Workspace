@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
@@ -241,6 +242,59 @@ class Task:
     result_notes: str
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+_TEMPLATE_VAR_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_áéíóúÁÉÍÓÚñÑ-]+)\s*\}\}")
+
+
+def extract_template_variables(content: str) -> list[str]:
+    """Extrae nombres únicos de variables {{variable}} en orden de aparición."""
+    seen: set[str] = set()
+    variables: list[str] = []
+    for match in _TEMPLATE_VAR_RE.finditer(content):
+        name = match.group(1).strip()
+        if name not in seen:
+            seen.add(name)
+            variables.append(name)
+    return variables
+
+
+def render_template_content(content: str, values: dict[str, str]) -> str:
+    """Reemplaza los marcadores {{variable}} por sus valores proporcionados."""
+    def repl(m: re.Match[str]) -> str:
+        var = m.group(1).strip()
+        return values.get(var, m.group(0))
+
+    return _TEMPLATE_VAR_RE.sub(repl, content)
+
+
+class PromptTemplateScope(StrEnum):
+    """Ámbito de visibilidad de una plantilla de prompt (fase 6B.2)."""
+
+    GLOBAL = "global"
+    PROJECT = "project"
+
+    @property
+    def label(self) -> str:
+        return "Global" if self == PromptTemplateScope.GLOBAL else "Proyecto"
+
+
+@dataclass(frozen=True)
+class PromptTemplate:
+    """Plantilla de prompt reutilizable para acelerar el trabajo con agentes."""
+
+    id: int
+    name: str
+    description: str
+    category: str
+    scope: PromptTemplateScope
+    project_id: int | None
+    content: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    def variables(self) -> list[str]:
+        return extract_template_variables(self.content)
 
 
 @dataclass

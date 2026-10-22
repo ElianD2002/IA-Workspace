@@ -48,6 +48,15 @@ def tool_chip(kind: AgentKind | str, mono: str | None = None, tooltip: str | Non
     return chip
 
 
+def chip(text: str, style_class: str = "tag-chip") -> Gtk.Label:
+    """Etiqueta compacta o píldora de texto para categorías, etiquetas y ámbitos."""
+    lbl = Gtk.Label(label=text, xalign=0.5, yalign=0.5)
+    lbl.add_css_class("badge")
+    if style_class:
+        lbl.add_css_class(style_class)
+    return lbl
+
+
 def status_pill(text: str, style: str, spinning: bool = False) -> Gtk.Box:
     box = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
     box.add_css_class("status-pill")

@@ -171,18 +171,73 @@ def main() -> None:
                     view._last_dialog.close()
                     pump(0.3)
 
+            # Sembrar plantillas de demostración
+            from ia_workspace.domain.models import PromptTemplateScope
+            tmpl1 = ctx.prompt_templates.create(
+                name="Auditoría de Seguridad OWASP",
+                content="Analiza {{archivo}} buscando posibles vulnerabilidades de inyección y autenticación. Entrega mitigaciones concretas para {{modulo}}.",
+                category="Seguridad",
+                scope=PromptTemplateScope.GLOBAL,
+                description="Auditoría estricta de código antes de pull request.",
+            )
+            ctx.prompt_templates.create(
+                name="Refactorización y tipado estricto",
+                content="Revisa el archivo {{archivo}} y añade anotaciones de tipo exhaustivas según PEP 484.",
+                category="Calidad",
+                scope=PromptTemplateScope.PROJECT,
+                project_id=ids[0],
+                description="Modernización de código Python legado.",
+            )
+
             # Pantalla completa «Tareas y prompts»
             win.navigate("tasks")
-            pump(0.5)
-            capture(win, f"{scheme}-05g-pantalla-tareas")
+            pump(0.6)
             tasks_page = win._pages.get("tasks")
+            if tasks_page:
+                tasks_page.refresh()
+                pump(0.4)
+            capture(win, f"{scheme}-05g-pantalla-tareas")
             if tasks_page and hasattr(tasks_page, "_tasks_list"):
                 first_row = tasks_page._tasks_list.get_first_child()
                 if first_row and hasattr(first_row, "set_expanded"):
                     first_row.set_expanded(True)
                     pump(0.5)
                     capture(win, f"{scheme}-05h-tarea-detalle")
+
+            # Captura de la sección «Biblioteca de prompts»
+            if tasks_page and hasattr(tasks_page, "_section_toggle"):
+                tasks_page._section_toggle.set_active_name("templates")
+                pump(0.8)
+                first_tmpl_row = tasks_page._templates_list.get_first_child()
+                if first_tmpl_row and hasattr(first_tmpl_row, "set_expanded"):
+                    first_tmpl_row.set_expanded(True)
+                    pump(0.5)
+                capture(win, f"{scheme}-05j-biblioteca-prompts")
+
             win.open_project(ids[0])
+            pump(0.8)
+            view = win._workspaces[ids[0]]
+
+            # Diálogo modal de Biblioteca en el Workspace
+            view._open_prompt_library()
+            pump(1.0)
+            capture(win, f"{scheme}-05k-dialogo-biblioteca")
+
+            # Abrir diálogo de variables para la plantilla seleccionada
+            from ia_workspace.ui.dialogs.fill_variables import FillVariablesDialog
+            if view._last_dialog:
+                view._last_dialog.close()
+                pump(0.3)
+            var_dlg = FillVariablesDialog(template=tmpl1, on_complete=lambda _r: None)
+            var_dlg.present(win)
+            if "archivo" in var_dlg._entries:
+                var_dlg._entries["archivo"].set_text("src/auth/service.py")
+            if "modulo" in var_dlg._entries:
+                var_dlg._entries["modulo"].set_text("Módulo de autenticación")
+            pump(0.8)
+            capture(win, f"{scheme}-05l-dialogo-variables")
+            var_dlg.close()
+            pump(0.3)
 
             win.set_default_size(1024, 768)
             view.request_link_conversation()

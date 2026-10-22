@@ -491,7 +491,7 @@ class QuotaTests(unittest.TestCase):
             conn.close()
 
             db = Database(db_path)
-            self.assertEqual(db.version, 9)
+            self.assertEqual(db.version, 10)
             row = db.conn.execute("SELECT name FROM projects WHERE path = '/migrado'").fetchone()
             self.assertIsNotNone(row)
             self.assertEqual(row[0], "Migrado")

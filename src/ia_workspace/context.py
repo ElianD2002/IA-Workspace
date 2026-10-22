@@ -16,6 +16,7 @@ from ia_workspace.persistence.repositories import (
     BrainProjectRepository,
     ChatLinkRepository,
     ProjectRepository,
+    PromptTemplateRepository,
     PromptTransferRepository,
     SettingsRepository,
     TaskRepository,
@@ -23,6 +24,7 @@ from ia_workspace.persistence.repositories import (
 )
 from ia_workspace.services.chat_links import ChatLinkService
 from ia_workspace.services.projects import ProjectService
+from ia_workspace.services.prompt_templates import PromptTemplateService
 from ia_workspace.services.prompt_transfers import PromptTransferService
 from ia_workspace.services.tasks import TaskService
 from ia_workspace.services.workspace import WorkspaceController
@@ -80,6 +82,7 @@ class AppContext:
     chat_links: ChatLinkService
     prompt_transfers: PromptTransferService
     tasks: TaskService
+    prompt_templates: PromptTemplateService
     autonomy: AgentAutonomyRepository
     quotas: QuotaService | None = None
     brain: BrainService | None = None  # None sin carpeta de datos (pruebas con ":memory:")
@@ -108,6 +111,7 @@ class AppContext:
         quotas = QuotaService(repo=quota_repo, dispatch=dispatch)
         prompt_transfers = PromptTransferService(PromptTransferRepository(db))
         tasks = TaskService(TaskRepository(db), sessions=sessions)
+        prompt_templates = PromptTemplateService(PromptTemplateRepository(db))
         return cls(
             paths=paths,
             db=db,
@@ -119,6 +123,7 @@ class AppContext:
             chat_links=ChatLinkService(ChatLinkRepository(db)),
             prompt_transfers=prompt_transfers,
             tasks=tasks,
+            prompt_templates=prompt_templates,
             autonomy=AgentAutonomyRepository(db),
             quotas=quotas,
             brain=build_brain(db, paths) if paths is not None else None,
@@ -128,4 +133,5 @@ class AppContext:
     def close(self) -> None:
         self.workspace.flush()
         self.tasks.close()
+        self.prompt_templates.close()
         self.db.close()

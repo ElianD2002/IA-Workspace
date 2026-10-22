@@ -13,6 +13,8 @@ from ia_workspace.domain.models import (
     FolderIdentity,
     NewProject,
     Project,
+    PromptTemplate,
+    PromptTemplateScope,
     PromptTransfer,
     RetiredMemory,
     Task,
@@ -562,3 +564,185 @@ class TaskRepository:
         """
         rows = self._conn.execute(query, (session_id,)).fetchall()
         return [self._row(r) for r in rows]
+
+
+class PromptTemplateRepository:
+    """Persistencia de plantillas de prompts reutilizables (fase 6B.2)."""
+
+    def __init__(self, db: Database) -> None:
+        self._conn = db.conn
+
+    def _row(self, row: sqlite3.Row) -> PromptTemplate:
+        return PromptTemplate(
+            id=int(row["id"]),
+            name=str(row["name"]),
+            description=str(row["description"]),
+            category=str(row["category"]),
+            scope=PromptTemplateScope(row["scope"]),
+            project_id=int(row["project_id"]) if row["project_id"] is not None else None,
+            content=str(row["content"]),
+            created_at=_parse_dt(row["created_at"]),
+            updated_at=_parse_dt(row["updated_at"]),
+        )
+
+    def create(
+        self,
+        name: str,
+        content: str,
+        category: str = "General",
+        description: str = "",
+        scope: PromptTemplateScope = PromptTemplateScope.GLOBAL,
+        project_id: int | None = None,
+    ) -> PromptTemplate:
+        if scope == PromptTemplateScope.GLOBAL:
+            project_id = None
+        elif scope == PromptTemplateScope.PROJECT and project_id is None:
+            raise ValueError("Una plantilla de ámbito 'project' requiere especificar project_id")
+
+        now = _now()
+        with self._conn:
+            cur = self._conn.execute(
+                """
+                INSERT INTO prompt_templates
+                (name, description, category, scope, project_id, content, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    name.strip(),
+                    description.strip(),
+                    category.strip() or "General",
+                    scope.value,
+                    project_id,
+                    content.strip(),
+                    now,
+                    now,
+                ),
+            )
+            template_id = int(cur.lastrowid)
+        tmpl = self.get(template_id)
+        assert tmpl is not None
+        return tmpl
+
+    def get(self, template_id: int) -> PromptTemplate | None:
+        row = self._conn.execute(
+            "SELECT * FROM prompt_templates WHERE id = ?",
+            (template_id,),
+        ).fetchone()
+        return self._row(row) if row else None
+
+    def update(
+        self,
+        template_id: int,
+        name: str,
+        content: str,
+        category: str = "General",
+        description: str = "",
+        scope: PromptTemplateScope = PromptTemplateScope.GLOBAL,
+        project_id: int | None = None,
+    ) -> PromptTemplate | None:
+        if scope == PromptTemplateScope.GLOBAL:
+            project_id = None
+        elif scope == PromptTemplateScope.PROJECT and project_id is None:
+            raise ValueError("Una plantilla de ámbito 'project' requiere especificar project_id")
+
+        now = _now()
+        with self._conn:
+            cur = self._conn.execute(
+                """
+                UPDATE prompt_templates
+                SET name = ?, description = ?, category = ?, scope = ?, project_id = ?, content = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    name.strip(),
+                    description.strip(),
+                    category.strip() or "General",
+                    scope.value,
+                    project_id,
+                    content.strip(),
+                    now,
+                    template_id,
+                ),
+            )
+            if cur.rowcount == 0:
+                return None
+        return self.get(template_id)
+
+    def delete(self, template_id: int) -> bool:
+        with self._conn:
+            cur = self._conn.execute(
+                "DELETE FROM prompt_templates WHERE id = ?",
+                (template_id,),
+            )
+            return cur.rowcount > 0
+
+    def list_for_project(
+        self,
+        project_id: int,
+        category: str | None = None,
+        search: str = "",
+    ) -> list[PromptTemplate]:
+        """Plantillas accesibles para un proyecto específico (globales + propias del proyecto)."""
+        clauses = ["(scope = 'global' OR (scope = 'project' AND project_id = ?))"]
+        params: list[object] = [project_id]
+        if category and category != "all":
+            clauses.append("category = ?")
+            params.append(category)
+        if search.strip():
+            clauses.append("(name LIKE ? OR description LIKE ? OR content LIKE ?)")
+            pattern = f"%{search.strip()}%"
+            params.extend([pattern, pattern, pattern])
+
+        query = f"""
+            SELECT * FROM prompt_templates
+            WHERE {' AND '.join(clauses)}
+            ORDER BY updated_at DESC, id DESC
+        """
+        rows = self._conn.execute(query, params).fetchall()
+        return [self._row(r) for r in rows]
+
+    def list_all(
+        self,
+        project_id: int | None = None,
+        category: str | None = None,
+        search: str = "",
+    ) -> list[PromptTemplate]:
+        """Lista plantillas. Si project_id es None, lista todas; si tiene project_id filtra solo ese."""
+        clauses: list[str] = []
+        params: list[object] = []
+        if project_id is not None:
+            clauses.append("(scope = 'project' AND project_id = ?)")
+            params.append(project_id)
+        if category and category != "all":
+            clauses.append("category = ?")
+            params.append(category)
+        if search.strip():
+            clauses.append("(name LIKE ? OR description LIKE ? OR content LIKE ?)")
+            pattern = f"%{search.strip()}%"
+            params.extend([pattern, pattern, pattern])
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = f"""
+            SELECT * FROM prompt_templates
+            {where}
+            ORDER BY updated_at DESC, id DESC
+        """
+        rows = self._conn.execute(query, params).fetchall()
+        return [self._row(r) for r in rows]
+
+    def categories(self, project_id: int | None = None) -> list[str]:
+        """Devuelve categorías únicas de plantillas disponibles."""
+        if project_id is not None:
+            rows = self._conn.execute(
+                """
+                SELECT DISTINCT category FROM prompt_templates
+                WHERE (scope = 'global' OR (scope = 'project' AND project_id = ?))
+                ORDER BY category ASC
+                """,
+                (project_id,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT DISTINCT category FROM prompt_templates ORDER BY category ASC"
+            ).fetchall()
+        return [str(r[0]) for r in rows if r[0]]

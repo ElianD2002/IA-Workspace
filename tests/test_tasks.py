@@ -43,8 +43,8 @@ class TestTasksModule(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_schema_version_and_tables(self) -> None:
-        """Comprueba que la migración incremental a versión 9 existe con las tablas tasks y task_history."""
-        self.assertEqual(SCHEMA_VERSION, 9)
+        """Comprueba que la migración incremental a versión 9 o superior existe con las tablas tasks y task_history."""
+        self.assertGreaterEqual(SCHEMA_VERSION, 9)
         # Comprobar existencia de tablas
         tables = [
             row["name"]

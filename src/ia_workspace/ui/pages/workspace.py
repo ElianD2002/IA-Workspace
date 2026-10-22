@@ -630,10 +630,19 @@ class WorkspaceView(Page):
     def _build_prompt_pane(self) -> Gtk.Widget:
         pane = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, height_request=150)
         self._prompt_meta = w.caption("")
-        library = Gtk.Button(label="Biblioteca", sensitive=False, tooltip_text="Disponible en una próxima fase")
-        library.add_css_class("flat")
+
+        library_btn = Gtk.Button(label="Biblioteca", tooltip_text="Abrir biblioteca de plantillas de prompts")
+        library_btn.add_css_class("flat")
+        library_btn.connect("clicked", lambda _b: self._open_prompt_library())
+        self._library_btn = library_btn
+
+        save_template_btn = Gtk.Button(icon_name="document-save-symbolic", tooltip_text="Guardar borrador como plantilla")
+        save_template_btn.add_css_class("flat")
+        save_template_btn.connect("clicked", lambda _b: self._save_draft_as_template())
+        self._save_template_btn = save_template_btn
+
         pane.append(_pane_header(_pane_title("Prompt", Gtk.Image.new_from_icon_name("document-edit-symbolic")),
-                                 self._prompt_meta, library))
+                                 self._prompt_meta, save_template_btn, library_btn))
 
         self._prompt = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR, top_margin=10, bottom_margin=10,
                                     left_margin=12, right_margin=12)
@@ -678,7 +687,66 @@ class WorkspaceView(Page):
         length = len(self.state.prompt_draft)
         self._placeholder.set_visible(length == 0)
         self._prompt_meta.set_label(f"{length} caracteres · borrador guardado" if length else "")
+        if hasattr(self, "_save_template_btn"):
+            self._save_template_btn.set_sensitive(bool(self.state.prompt_draft.strip()))
         self._update_transfer_sensitivity()
+
+    def _open_prompt_library(self) -> None:
+        from ia_workspace.ui.dialogs.prompt_library import PromptLibraryDialog
+
+        dialog = PromptLibraryDialog(
+            ctx=self.ctx,
+            project=self.project,
+            on_select_prompt=self._on_template_selected,
+        )
+        dialog.present(self.get_root())
+        self._last_dialog = dialog
+
+    def _on_template_selected(self, new_text: str) -> None:
+        current_text = self.state.prompt_draft.strip()
+        if not current_text:
+            self._apply_template_text(new_text)
+            return
+
+        # Confirmar reemplazo si ya contiene texto
+        dialog = Adw.AlertDialog(
+            heading="¿Reemplazar el borrador actual?",
+            body="El editor de prompts ya contiene texto. Esta acción sustituirá el borrador actual por la plantilla seleccionada.",
+        )
+        dialog.add_response("cancel", "Conservar borrador")
+        dialog.add_response("replace", "Reemplazar")
+        dialog.set_response_appearance("replace", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("replace")
+        dialog.set_close_response("cancel")
+
+        def _on_response(_dlg: Adw.AlertDialog, response: str) -> None:
+            if response == "replace":
+                self._apply_template_text(new_text)
+
+        dialog.connect("response", _on_response)
+        dialog.present(self.get_root())
+        self._last_dialog = dialog
+
+    def _apply_template_text(self, text: str) -> None:
+        buf = self._prompt.get_buffer()
+        buf.set_text(text)
+        self._prompt.grab_focus()
+
+    def _save_draft_as_template(self) -> None:
+        draft = self.state.prompt_draft.strip()
+        if not draft:
+            return
+
+        from ia_workspace.ui.dialogs.template_editor import TemplateEditorDialog
+
+        dialog = TemplateEditorDialog(
+            ctx=self.ctx,
+            project=self.project,
+            initial_content=draft,
+            on_saved=lambda _t: self.nav.toast("Plantilla guardada en la biblioteca"),
+        )
+        dialog.present(self.get_root())
+        self._last_dialog = dialog
 
     def _on_agent_selected(self, *_args: object) -> None:
         index = self._agent_picker.get_selected()
