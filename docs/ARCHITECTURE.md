@@ -259,6 +259,31 @@ fila de conversación ─► WorkspaceView.open_conversation(link_id)   (solo en
   sirve las conversaciones desde un servidor simulado; `scripts/check.sh` la fija por
   defecto a un puerto cerrado para que ninguna prueba cargue el sitio real.
 
+## Arquitectura del portapapeles y menús contextuales
+
+```
+Portapapeles del sistema (GNOME Wayland / Gdk.Clipboard)
+  │
+  ├───► Terminales VTE (backend.py: VteTerminalHandle)
+  │       ├── Atajos estándar: Ctrl+Shift+C (copiar), Ctrl+Shift+V (pegar), Shift+Insert, Ctrl+Insert, Ctrl+Shift+A
+  │       ├── Preservación de PTY: Ctrl+C (SIGINT) y Ctrl+V pasan intactos al proceso hijo
+  │       ├── Menú contextual: PopoverMenu con Copiar, Pegar y Seleccionar todo (clic derecho / tecla Menú)
+  │       └── Pegado seguro: terminal.paste_clipboard() respeta bracketed paste mode (sin tecleo simulado)
+  │
+  ├───► ChatGPT integrado (chatgpt_browser.py: ChatBrowser)
+  │       ├── Foco explícito: focusable y focus_on_click activos; grab_focus al abrir o expandir
+  │       ├── Comandos de edición WebCore: execute_editing_command (PASTE, COPY, CUT, SELECT_ALL, UNDO, REDO)
+  │       ├── Sin inyección JS: opera a nivel de motor web respetando aislamiento de sesión y cookies
+  │       └── Atajos globales: Ctrl+Q, F9, Ctrl+O, etc. no se consumen y fluyen a la ventana
+  │
+  ├───► Transferencia de prompts y enlaces (workspace.py)
+  │       └── Portapapeles GTK: Gdk.Clipboard nativo (compatible con Wayland, X11 y sesiones de escritorio)
+  │
+  └───► Agentes interactivos (Claude Code, OpenAI Codex, Google Antigravity, Shell)
+          ├── Operan dentro del PTY de VTE con soporte completo de pegado multilínea
+          └── Antigravity (agy): documentada la dependencia opcional de /usr/bin/wl-copy y /usr/bin/wl-paste
+              para funciones internas del agente independientes de la emulación de terminal VTE.
+
 ### Limitaciones conocidas
 
 - El inicio de sesión real solo puede confirmarlo el usuario. Los flujos por redirección

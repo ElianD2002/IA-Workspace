@@ -452,9 +452,11 @@ class WorkspaceView(Page):
         self._web_title.set_tooltip_text(link.title)
         if self._expanded is None:
             self._chat_stack.set_visible_child_name("web")
+            GLib.idle_add(self._ensure_browser().view.grab_focus)
         else:
             self._expanded.select_link(link.id)
             self._expanded.set_title(f"ChatGPT · {link.title}")
+            GLib.idle_add(self._ensure_browser().view.grab_focus)
         self._render_links()
         return True
 
@@ -530,6 +532,8 @@ class WorkspaceView(Page):
                 dialog.set_title(f"ChatGPT · {current.title}")
         self._update_web_ui()
         dialog.present(root)
+        if self._browser is not None:
+            GLib.idle_add(self._browser.view.grab_focus)
         self._last_dialog = dialog
 
     def _on_expanded_closed(self, _dialog: Adw.Dialog) -> None:
@@ -539,12 +543,22 @@ class WorkspaceView(Page):
         self._web_stack.set_visible_child_name("view")
         if self._current_link() is not None and self._chat_pane.get_visible():
             self._chat_stack.set_visible_child_name("web")
+            if self._browser is not None:
+                GLib.idle_add(self._browser.view.grab_focus)
         self._update_web_ui()
+
+    def _set_clipboard(self, text: str) -> None:
+        try:
+            cb = self.get_clipboard()
+            if cb is not None:
+                cb.set(text)
+        except Exception:
+            pass
 
     def _copy_link(self, link_id: int) -> None:
         link = self.ctx.chat_links.get(link_id)
         if link is not None:
-            self.get_clipboard().set(link.url)
+            self._set_clipboard(link.url)
             self.nav.toast("Enlace copiado")
 
     def _rename_link(self, link_id: int) -> None:
@@ -703,7 +717,7 @@ class WorkspaceView(Page):
             self.project.id, kind, prompt, info.id, method, status, info.detail if status == "error" else ""
         )
         if method == "manual":
-            self.get_clipboard().set(prompt)
+            self._set_clipboard(prompt)
             self.nav.toast(f"Prompt copiado. Pégalo en la sesión de {kind.label} en cuanto esté lista.")
         elif status == "error":
             self.nav.toast(f"No se pudo transferir el prompt: {info.detail}")

@@ -71,6 +71,7 @@ run_ui_test test_workspace_ui "Panel derecho y conversaciones"
 run_ui_test test_prompt_transfer_ui "Transferencia de prompts a agentes"
 run_ui_test test_icon_ui "Icono oficial en GTK"
 run_ui_test test_chatgpt_web_ui "ChatGPT integrado (WebKitGTK, sitio simulado)"
+run_ui_test test_clipboard "Portapapeles y menús contextuales"
 
 # Ningún dato de cuenta (de los dobles de prueba) debe acabar en registros.
 if grep -rIl -E "persona@example\.invalid|FAKE-ORG-SECRET-123|sim_session_7f3a" "$ROOT/var"/*.log 2>/dev/null; then

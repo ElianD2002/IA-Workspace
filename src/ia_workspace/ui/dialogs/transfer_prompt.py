@@ -61,8 +61,8 @@ class TransferPromptDialog(Adw.Dialog):
             if direct
             else (
                 f"{kind.label} todavía no tiene un mecanismo oficial para recibir aquí un prompt "
-                "inicial: se copiará al portapapeles y se abrirá una sesión nueva. Pégalo (Ctrl+V) en "
-                "cuanto la sesión esté lista."
+                "inicial: se copiará al portapapeles y se abrirá una sesión nueva. Pégalo (Ctrl+Shift+V o menú "
+                "contextual) en cuanto la sesión esté lista."
             )
         )
         page.add(Adw.PreferencesGroup(description=note_text))

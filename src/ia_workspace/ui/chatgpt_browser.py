@@ -24,6 +24,7 @@ from pathlib import Path
 
 import gi
 
+gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 try:
     gi.require_version("WebKit", "6.0")
@@ -34,7 +35,7 @@ except (ValueError, ImportError):  # falta gir1.2-webkit-6.0
     WebKit = None  # type: ignore[assignment]
     WEBKIT_AVAILABLE = False
 
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from ia_workspace.services.web_policy import Decision, navigation_decision, test_base_url  # noqa: E402
 
@@ -112,6 +113,8 @@ class ChatBrowser:
         self.loading = False
 
         self.view = WebKit.WebView(network_session=session, hexpand=True, vexpand=True)
+        self.view.set_focusable(True)
+        self.view.set_focus_on_click(True)
         settings = self.view.get_settings()
         settings.set_enable_javascript(True)  # la aplicación web oficial lo necesita
         settings.set_enable_developer_extras(False)
@@ -119,12 +122,74 @@ class ChatBrowser:
         settings.set_allow_file_access_from_file_urls(False)
         settings.set_allow_universal_access_from_file_urls(False)
 
+        key_ctrl = Gtk.EventControllerKey.new()
+        key_ctrl.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        key_ctrl.connect("key-pressed", self._on_key_pressed)
+        self.view.add_controller(key_ctrl)
+
         self.view.connect("decide-policy", self._on_decide_policy)
         self.view.connect("permission-request", self._on_permission_request)
         self.view.connect("load-changed", self._on_load_changed)
         self.view.connect("load-failed", self._on_load_failed)
         self.view.connect("web-process-terminated", self._on_terminated)
         self.view.connect("notify::title", lambda *_: self._on_changed())
+
+    def _on_key_pressed(
+        self,
+        _ctrl: Gtk.EventControllerKey,
+        keyval: int,
+        _keycode: int,
+        state: Gdk.ModifierType,
+    ) -> bool:
+        mods = state & (
+            Gdk.ModifierType.CONTROL_MASK
+            | Gdk.ModifierType.SHIFT_MASK
+            | Gdk.ModifierType.ALT_MASK
+            | Gdk.ModifierType.SUPER_MASK
+        )
+        ctrl = Gdk.ModifierType.CONTROL_MASK
+        ctrl_shift = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+
+        # Pegar (Ctrl+V, Ctrl+Shift+V, Shift+Insert)
+        if (mods == ctrl and keyval in (Gdk.KEY_v, Gdk.KEY_V)) or (
+            mods == Gdk.ModifierType.SHIFT_MASK and keyval == Gdk.KEY_Insert
+        ):
+            self.view.execute_editing_command(WebKit.EDITING_COMMAND_PASTE)
+            return True
+        if mods == ctrl_shift and keyval in (Gdk.KEY_v, Gdk.KEY_V):
+            self.view.execute_editing_command(WebKit.EDITING_COMMAND_PASTE_AS_PLAIN_TEXT)
+            return True
+
+        # Copiar (Ctrl+C, Ctrl+Insert)
+        if (mods == ctrl and keyval in (Gdk.KEY_c, Gdk.KEY_C)) or (
+            mods == ctrl and keyval == Gdk.KEY_Insert
+        ):
+            self.view.execute_editing_command(WebKit.EDITING_COMMAND_COPY)
+            return True
+
+        # Cortar (Ctrl+X, Shift+Delete)
+        if (mods == ctrl and keyval in (Gdk.KEY_x, Gdk.KEY_X)) or (
+            mods == Gdk.ModifierType.SHIFT_MASK and keyval == Gdk.KEY_Delete
+        ):
+            self.view.execute_editing_command(WebKit.EDITING_COMMAND_CUT)
+            return True
+
+        # Seleccionar todo (Ctrl+A)
+        if mods == ctrl and keyval in (Gdk.KEY_a, Gdk.KEY_A):
+            self.view.execute_editing_command(WebKit.EDITING_COMMAND_SELECT_ALL)
+            return True
+
+        # Deshacer (Ctrl+Z) y Rehacer (Ctrl+Shift+Z, Ctrl+Y)
+        if mods == ctrl and keyval in (Gdk.KEY_z, Gdk.KEY_Z):
+            self.view.execute_editing_command(WebKit.EDITING_COMMAND_UNDO)
+            return True
+        if (mods == ctrl_shift and keyval in (Gdk.KEY_z, Gdk.KEY_Z)) or (
+            mods == ctrl and keyval in (Gdk.KEY_y, Gdk.KEY_Y)
+        ):
+            self.view.execute_editing_command(WebKit.EDITING_COMMAND_REDO)
+            return True
+
+        return False
 
     # ---- acciones -------------------------------------------------------------------
 

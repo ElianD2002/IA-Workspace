@@ -29,10 +29,11 @@ from pathlib import Path
 
 import gi
 
+gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 gi.require_version("Vte", "3.91")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, GLib, Gtk, Pango, Vte  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango, Vte  # noqa: E402
 
 from ia_workspace.domain.models import AgentKind  # noqa: E402
 from ia_workspace.sessions.backend import SessionSink  # noqa: E402
@@ -85,6 +86,9 @@ class VteTerminalHandle:
         self._terminal.connect("child-exited", self._on_child_exited)
         self._style_handler = theme.follow_style(self._terminal)
 
+        self._popover: Gtk.PopoverMenu | None = None
+        self._setup_clipboard_and_menu()
+
         self._terminal.spawn_async(
             Vte.PtyFlags.DEFAULT,
             spec.cwd,
@@ -105,12 +109,150 @@ class VteTerminalHandle:
 
     def dispose(self) -> None:
         self._cancel_timer()
+        if self._popover is not None:
+            self._popover.unparent()
+            self._popover = None
         if self._style_handler:
             Adw.StyleManager.get_default().disconnect(self._style_handler)
             self._style_handler = 0
         if self._on_dispose is not None:
             self._on_dispose(self)
             self._on_dispose = None
+
+    # ---- Portapapeles y menú contextual ---------------------------------------
+
+    def _setup_clipboard_and_menu(self) -> None:
+        actions = Gio.SimpleActionGroup()
+        self._act_copy = Gio.SimpleAction.new("copy", None)
+        self._act_copy.connect("activate", lambda *_: self.copy_selection())
+        actions.add_action(self._act_copy)
+
+        self._act_paste = Gio.SimpleAction.new("paste", None)
+        self._act_paste.connect("activate", lambda *_: self.paste_from_clipboard())
+        actions.add_action(self._act_paste)
+
+        self._act_select_all = Gio.SimpleAction.new("select-all", None)
+        self._act_select_all.connect("activate", lambda *_: self.select_all())
+        actions.add_action(self._act_select_all)
+
+        self._terminal.insert_action_group("term", actions)
+
+        menu = Gio.Menu()
+        item_copy = Gio.MenuItem.new("Copiar", "term.copy")
+        item_copy.set_attribute_value("accel", GLib.Variant.new_string("<Control><Shift>C"))
+        menu.append_item(item_copy)
+
+        item_paste = Gio.MenuItem.new("Pegar", "term.paste")
+        item_paste.set_attribute_value("accel", GLib.Variant.new_string("<Control><Shift>V"))
+        menu.append_item(item_paste)
+
+        item_sel = Gio.MenuItem.new("Seleccionar todo", "term.select-all")
+        item_sel.set_attribute_value("accel", GLib.Variant.new_string("<Control><Shift>A"))
+        menu.append_item(item_sel)
+
+        popover = Gtk.PopoverMenu.new_from_model(menu)
+        popover.set_parent(self._terminal)
+        popover.set_has_arrow(False)
+        self._popover = popover
+
+        # Clic derecho
+        click = Gtk.GestureClick.new()
+        click.set_button(3)
+        click.connect("pressed", self._on_context_click)
+        self._terminal.add_controller(click)
+
+        # Teclado (Ctrl+Shift+C, Ctrl+Shift+V, Shift+Insert, etc.)
+        key_ctrl = Gtk.EventControllerKey.new()
+        key_ctrl.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        key_ctrl.connect("key-pressed", self._on_key_pressed)
+        self._terminal.add_controller(key_ctrl)
+
+        # Tecla de menú de contexto / Shift+F10
+        self._terminal.connect("setup-context-menu", self._on_setup_context_menu)
+
+    def _update_action_states(self) -> None:
+        has_sel = bool(self._terminal.get_has_selection())
+        self._act_copy.set_enabled(has_sel)
+
+    def _on_context_click(self, _gesture: Gtk.GestureClick, _n: int, x: float, y: float) -> None:
+        if self._popover is None:
+            return
+        self._update_action_states()
+        rect = Gdk.Rectangle()
+        rect.x, rect.y = int(x), int(y)
+        rect.width = rect.height = 1
+        self._popover.set_pointing_to(rect)
+        self._popover.popup()
+
+    def _on_setup_context_menu(self, _term: Vte.Terminal, ctx: object | None) -> None:
+        if self._popover is None:
+            return
+        self._update_action_states()
+        if ctx is not None and hasattr(ctx, "get_coordinates"):
+            ok, x, y = ctx.get_coordinates()
+            if ok:
+                rect = Gdk.Rectangle()
+                rect.x, rect.y = int(x), int(y)
+                rect.width = rect.height = 1
+                self._popover.set_pointing_to(rect)
+        self._popover.popup()
+
+    def _on_key_pressed(
+        self,
+        _ctrl: Gtk.EventControllerKey,
+        keyval: int,
+        _keycode: int,
+        state: Gdk.ModifierType,
+    ) -> bool:
+        mods = state & (
+            Gdk.ModifierType.CONTROL_MASK
+            | Gdk.ModifierType.SHIFT_MASK
+            | Gdk.ModifierType.ALT_MASK
+            | Gdk.ModifierType.SUPER_MASK
+        )
+        ctrl_shift = Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+
+        # Ctrl+Shift+C o Ctrl+Insert -> Copiar selección
+        if (mods == ctrl_shift and keyval in (Gdk.KEY_C, Gdk.KEY_c)) or (
+            mods == Gdk.ModifierType.CONTROL_MASK and keyval == Gdk.KEY_Insert
+        ):
+            self.copy_selection()
+            return True
+
+        # Ctrl+Shift+V o Shift+Insert -> Pegar desde portapapeles
+        if (mods == ctrl_shift and keyval in (Gdk.KEY_V, Gdk.KEY_v)) or (
+            mods == Gdk.ModifierType.SHIFT_MASK and keyval == Gdk.KEY_Insert
+        ):
+            self.paste_from_clipboard()
+            return True
+
+        # Ctrl+Shift+A -> Seleccionar todo
+        if mods == ctrl_shift and keyval in (Gdk.KEY_A, Gdk.KEY_a):
+            self.select_all()
+            return True
+
+        return False
+
+    def copy_selection(self) -> bool:
+        """Copia la selección actual al portapapeles si existe texto seleccionado."""
+        if not self._terminal.get_realized():
+            return False
+        if self._terminal.get_has_selection():
+            self._terminal.copy_clipboard_format(Vte.Format.TEXT)
+            return True
+        return False
+
+    def paste_from_clipboard(self) -> None:
+        """Pega el contenido del portapapeles respetando bracketed paste mode si está activo."""
+        if not self._terminal.get_realized():
+            return
+        self._terminal.paste_clipboard()
+
+    def select_all(self) -> None:
+        """Selecciona todo el texto de la terminal."""
+        if not self._terminal.get_realized():
+            return
+        self._terminal.select_all()
 
     # ---- SessionHandle ---------------------------------------------------------
 
