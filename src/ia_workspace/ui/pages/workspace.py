@@ -16,7 +16,7 @@ from gi.repository import Adw, Gio, GLib, Gtk, Pango
 from ia_workspace.agents.auth import AuthState
 from ia_workspace.brain.bridge import compose_prompt_with_reference, resolve_brain_link
 from ia_workspace.brain.model import Scope
-from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind, Project, PromptTransfer
+from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind, AutonomyMode, Project, PromptTransfer
 from ia_workspace.services.chat_links import kind_of
 from ia_workspace.services.chatgpt_links import parse_chat_link
 from ia_workspace.services.detection import inspect_folder
@@ -723,6 +723,7 @@ class WorkspaceView(Page):
         initial_prompt = prompt
         if method == "direct" and include_brain and brain and brain.reference:
             initial_prompt = compose_prompt_with_reference(prompt, brain.reference)
+        autonomy = self.ctx.autonomy.get_mode(self.project.id, kind)
         spec = SessionSpec(
             project_id=self.project.id,
             kind=kind,
@@ -730,6 +731,7 @@ class WorkspaceView(Page):
             title=title,
             initial_prompt=initial_prompt if method == "direct" else None,
             brain=brain,
+            autonomy_mode=autonomy,
         )
         try:
             info = self.ctx.sessions.start(spec)
@@ -954,6 +956,7 @@ class WorkspaceView(Page):
         else:
             self._agent_seq[kind] = self._agent_seq.get(kind, 0) + 1
             title = f"{kind.label} {self._agent_seq[kind]}"
+        autonomy = self.ctx.autonomy.get_mode(self.project.id, kind) if not login else AutonomyMode.NORMAL
         spec = SessionSpec(
             project_id=self.project.id,
             kind=kind,
@@ -961,6 +964,7 @@ class WorkspaceView(Page):
             title=title,
             mode="login" if login else "interactive",
             brain=None if login else self._brain_link(kind),
+            autonomy_mode=autonomy,
         )
         try:
             info = self.ctx.sessions.start(spec)
@@ -977,6 +981,7 @@ class WorkspaceView(Page):
             return
         prompt = self.state.prompt_draft.strip() if with_prompt else ""
         title = prompt.splitlines()[0][:60] if prompt else f"Sesión de {kind.label}"
+        autonomy = self.ctx.autonomy.get_mode(self.project.id, kind)
         try:
             info = self.ctx.sessions.start(SessionSpec(
                 project_id=self.project.id,
@@ -984,6 +989,7 @@ class WorkspaceView(Page):
                 cwd=self.project.path,
                 title=title,
                 brain=self._brain_link(kind),
+                autonomy_mode=autonomy,
             ))
         except SessionError as exc:
             self.nav.toast(str(exc))
@@ -1166,6 +1172,16 @@ class WorkspaceView(Page):
                 pill.set_tooltip_text(b.detail)
                 self._brain_pill_holder.append(pill)
         is_terminal = selected.id in self._terminal_hosts
+        if selected.spec.autonomy_mode is not AutonomyMode.NORMAL:
+            style = "warning" if selected.spec.autonomy_mode is AutonomyMode.DANGER else "idle"
+            tooltip = (
+                "Modo sin confirmaciones: comandos y sandbox sin supervisión"
+                if selected.spec.autonomy_mode is AutonomyMode.DANGER
+                else "Modo automático: confirmaciones reducidas según políticas del agente"
+            )
+            mode_pill = w.status_pill(selected.spec.autonomy_mode.label, style)
+            mode_pill.set_tooltip_text(tooltip)
+            self._session_pill_holder.append(mode_pill)
         if self.ctx.simulated_agents and not is_terminal:
             sim = Gtk.Label(label="SIMULADA")
             sim.add_css_class("sim-label")

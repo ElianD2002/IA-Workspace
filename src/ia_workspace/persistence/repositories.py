@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from ia_workspace.domain.models import (
     AgentKind,
+    AutonomyMode,
     ChatLink,
     FolderIdentity,
     NewProject,
@@ -346,3 +347,50 @@ class SettingsRepository:
                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                     (key, value),
                 )
+
+
+class AgentAutonomyRepository:
+    """Persistencia de niveles de autonomía y autorización de agentes por proyecto (fase 4)."""
+
+    def __init__(self, db: Database) -> None:
+        self._conn = db.conn
+
+    def get_mode(self, project_id: int, kind: AgentKind) -> AutonomyMode:
+        row = self._conn.execute(
+            "SELECT mode FROM project_agent_modes WHERE project_id = ? AND agent_kind = ?",
+            (project_id, kind.value),
+        ).fetchone()
+        if row is None:
+            return AutonomyMode.NORMAL
+        try:
+            return AutonomyMode(row["mode"])
+        except ValueError:
+            return AutonomyMode.NORMAL
+
+    def set_mode(self, project_id: int, kind: AgentKind, mode: AutonomyMode) -> None:
+        now = _now()
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO project_agent_modes (project_id, agent_kind, mode, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(project_id, agent_kind) DO UPDATE SET
+                    mode = excluded.mode,
+                    updated_at = excluded.updated_at
+                """,
+                (project_id, kind.value, mode.value, now),
+            )
+
+    def get_modes_for_project(self, project_id: int) -> dict[AgentKind, AutonomyMode]:
+        rows = self._conn.execute(
+            "SELECT agent_kind, mode FROM project_agent_modes WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+        result: dict[AgentKind, AutonomyMode] = {}
+        for row in rows:
+            try:
+                kind = AgentKind(row["agent_kind"])
+                result[kind] = AutonomyMode(row["mode"])
+            except ValueError:
+                continue
+        return result

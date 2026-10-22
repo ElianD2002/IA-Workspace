@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from ia_workspace.domain.models import AgentKind
+from ia_workspace.domain.models import AgentKind, AutonomyMode
 
 
 class SessionState(StrEnum):
@@ -113,6 +113,8 @@ class SessionSpec:
     # Integración con el Cerebro (solo sesiones de agente). ``None`` en terminales e
     # inicios de sesión.
     brain: BrainLink | None = None
+    # Nivel de autonomía y autorización de la sesión (fase 4).
+    autonomy_mode: AutonomyMode = AutonomyMode.NORMAL
 
 
 @dataclass

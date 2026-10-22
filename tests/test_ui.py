@@ -148,6 +148,42 @@ class AppFlowTest(unittest.TestCase):
                 pump(seconds=0.2)
                 check(sessions[0].state.is_active, "minimizar detuvo la sesión")
 
+                # Autonomía de agentes en el Centro de agentes (Fase 4).
+                from ia_workspace.domain.models import AgentKind, AutonomyMode
+
+                page_agents = win._pages["agents"]
+                check(page_agents._project is not None, "Centro de agentes sin proyecto seleccionado")
+                claude_combo = page_agents._autonomy_rows[AgentKind.CLAUDE_CODE]
+                check(claude_combo.get_selected() == 0, "Claude no inició en modo Normal")
+
+                # 1. Pasar a Automático se persiste directamente.
+                claude_combo.set_selected(1)
+                pump(seconds=0.05)
+                check(ctx.autonomy.get_mode(page_agents._project.id, AgentKind.CLAUDE_CODE) is AutonomyMode.AUTO,
+                      "el modo automático no se guardó en SQLite")
+                check(page_agents._last_dialog is None, "se abrió diálogo para modo automático")
+
+                # 2. Pasar a Sin confirmaciones abre el diálogo de advertencia.
+                claude_combo.set_selected(2)
+                pump(seconds=0.05)
+                check(page_agents._last_dialog is not None, "no se abrió el diálogo de confirmación para modo avanzado")
+
+                # 3. Cancelar el diálogo revierte el combo y NO persiste DANGER.
+                page_agents._last_dialog.emit("response", "cancel")
+                pump(seconds=0.05)
+                check(ctx.autonomy.get_mode(page_agents._project.id, AgentKind.CLAUDE_CODE) is AutonomyMode.AUTO,
+                      "cancelar guardó cambios en SQLite")
+                check(claude_combo.get_selected() == 1, "cancelar no revirtió la selección del combo")
+
+                # 4. Confirmar el diálogo guarda el modo DANGER en SQLite.
+                claude_combo.set_selected(2)
+                pump(seconds=0.05)
+                check(page_agents._last_dialog is not None, "no se abrió el diálogo de confirmación al reintentar")
+                page_agents._last_dialog.emit("response", "confirm")
+                pump(seconds=0.05)
+                check(ctx.autonomy.get_mode(page_agents._project.id, AgentKind.CLAUDE_CODE) is AutonomyMode.DANGER,
+                      "confirmar no guardó el modo DANGER en SQLite")
+
                 # Diálogos secundarios.
                 from ia_workspace.ui.dialogs.confirm_quit import build_confirm_quit_dialog
                 from ia_workspace.ui.dialogs.preferences import PreferencesDialog

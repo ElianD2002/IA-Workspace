@@ -61,6 +61,30 @@ SELECTABLE_AGENTS: tuple[AgentKind, ...] = (
 )
 
 
+class AutonomyMode(StrEnum):
+    """Nivel de autonomía y autorización de un agente en un proyecto (fase 4)."""
+
+    NORMAL = "normal"
+    AUTO = "auto"
+    DANGER = "danger"
+
+    @property
+    def label(self) -> str:
+        if self is AutonomyMode.AUTO:
+            return "Automático"
+        if self is AutonomyMode.DANGER:
+            return "Sin confirmaciones"
+        return "Normal"
+
+    @property
+    def description(self) -> str:
+        if self is AutonomyMode.AUTO:
+            return "Confirmaciones reducidas según políticas del agente."
+        if self is AutonomyMode.DANGER:
+            return "Ejecución sin confirmaciones ni sandbox (avanzado)."
+        return "Políticas predeterminadas de la CLI."
+
+
 def initials_for(name: str) -> str:
     words = [w for w in name.replace("-", " ").replace("_", " ").split() if w]
     if not words:

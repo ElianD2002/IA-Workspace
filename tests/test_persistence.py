@@ -6,9 +6,10 @@ from pathlib import Path
 
 from helpers import temp_dir
 
-from ia_workspace.domain.models import AgentKind, NewProject, WorkspaceState
+from ia_workspace.domain.models import AgentKind, AutonomyMode, NewProject, WorkspaceState
 from ia_workspace.persistence.database import SCHEMA_VERSION, Database
 from ia_workspace.persistence.repositories import (
+    AgentAutonomyRepository,
     DuplicateProjectError,
     ProjectRepository,
     SettingsRepository,
@@ -120,6 +121,50 @@ class StateRepositoryTests(unittest.TestCase):
         self.assertEqual(settings.get("k"), "w")
         settings.set("k", None)
         self.assertIsNone(settings.get("k"))
+
+
+class AgentAutonomyRepositoryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.db = Database(":memory:")
+        self.projects = ProjectRepository(self.db)
+        self.repo = AgentAutonomyRepository(self.db)
+        self.project_a = self.projects.add(NewProject("A", "/path/a", (AgentKind.CLAUDE_CODE, AgentKind.CODEX)))
+        self.project_b = self.projects.add(NewProject("B", "/path/b", (AgentKind.CLAUDE_CODE, AgentKind.ANTIGRAVITY)))
+
+    def test_default_mode_is_normal(self) -> None:
+        self.assertEqual(self.repo.get_mode(self.project_a.id, AgentKind.CLAUDE_CODE), AutonomyMode.NORMAL)
+        self.assertEqual(self.repo.get_mode(self.project_a.id, AgentKind.CODEX), AutonomyMode.NORMAL)
+        self.assertEqual(self.repo.get_mode(self.project_a.id, AgentKind.ANTIGRAVITY), AutonomyMode.NORMAL)
+
+    def test_set_and_get_mode(self) -> None:
+        self.repo.set_mode(self.project_a.id, AgentKind.CLAUDE_CODE, AutonomyMode.AUTO)
+        self.repo.set_mode(self.project_a.id, AgentKind.CODEX, AutonomyMode.DANGER)
+
+        self.assertEqual(self.repo.get_mode(self.project_a.id, AgentKind.CLAUDE_CODE), AutonomyMode.AUTO)
+        self.assertEqual(self.repo.get_mode(self.project_a.id, AgentKind.CODEX), AutonomyMode.DANGER)
+
+    def test_isolation_between_projects(self) -> None:
+        self.repo.set_mode(self.project_a.id, AgentKind.CLAUDE_CODE, AutonomyMode.DANGER)
+        # Project B remains in default NORMAL mode
+        self.assertEqual(self.repo.get_mode(self.project_b.id, AgentKind.CLAUDE_CODE), AutonomyMode.NORMAL)
+
+    def test_get_modes_for_project(self) -> None:
+        self.repo.set_mode(self.project_a.id, AgentKind.CLAUDE_CODE, AutonomyMode.AUTO)
+        self.repo.set_mode(self.project_a.id, AgentKind.CODEX, AutonomyMode.DANGER)
+
+        modes = self.repo.get_modes_for_project(self.project_a.id)
+        self.assertEqual(modes, {
+            AgentKind.CLAUDE_CODE: AutonomyMode.AUTO,
+            AgentKind.CODEX: AutonomyMode.DANGER,
+        })
+        self.assertEqual(self.repo.get_modes_for_project(self.project_b.id), {})
+
+    def test_cascade_delete_with_project(self) -> None:
+        self.repo.set_mode(self.project_a.id, AgentKind.CLAUDE_CODE, AutonomyMode.AUTO)
+        self.projects.remove(self.project_a.id)
+        self.assertEqual(self.repo.get_mode(self.project_a.id, AgentKind.CLAUDE_CODE), AutonomyMode.NORMAL)
+        count = self.db.conn.execute("SELECT COUNT(*) FROM project_agent_modes").fetchone()[0]
+        self.assertEqual(count, 0)
 
 
 if __name__ == "__main__":

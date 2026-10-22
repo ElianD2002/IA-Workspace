@@ -17,7 +17,7 @@ import helpers  # noqa: F401
 from ia_workspace.agents import auth, tools
 from ia_workspace.agents.auth import AuthState, CompletedCommand
 from ia_workspace.agents.catalog import AgentCatalog
-from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind
+from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind, AutonomyMode
 
 FAKE_PATHS = {"claude": "/fake/bin/claude", "codex": "/fake/bin/codex", "agy": "/fake/bin/agy"}
 PRIVATE = ("persona@example.invalid", "FAKE-ORG-SECRET-123")
@@ -97,6 +97,110 @@ class LaunchTests(unittest.TestCase):
         # Antigravity: no admite contexto por argumento de inicio
         with self.assertRaises(ValueError):
             tools.build_launch_argv(AgentKind.ANTIGRAVITY, which=which, context=ref)
+
+    def test_autonomy_modes_9_cases(self) -> None:
+        """Verifica exactamente los 9 casos: 3 agentes × 3 modos de autonomía."""
+        which = which_with("claude", "codex", "agy")
+
+        # 1. Claude Code - Normal
+        self.assertEqual(
+            tools.build_launch_argv(AgentKind.CLAUDE_CODE, which=which, autonomy_mode=AutonomyMode.NORMAL),
+            ["/fake/bin/claude"],
+        )
+        # 2. Claude Code - Automático
+        self.assertEqual(
+            tools.build_launch_argv(AgentKind.CLAUDE_CODE, which=which, autonomy_mode=AutonomyMode.AUTO),
+            ["/fake/bin/claude", "--permission-mode", "auto"],
+        )
+        # 3. Claude Code - Sin confirmaciones (avanzado)
+        self.assertEqual(
+            tools.build_launch_argv(AgentKind.CLAUDE_CODE, which=which, autonomy_mode=AutonomyMode.DANGER),
+            ["/fake/bin/claude", "--dangerously-skip-permissions"],
+        )
+
+        # 4. Codex - Normal
+        self.assertEqual(
+            tools.build_launch_argv(AgentKind.CODEX, which=which, autonomy_mode=AutonomyMode.NORMAL),
+            ["/fake/bin/codex", "--no-daemon"],
+        )
+        # 5. Codex - Automático
+        self.assertEqual(
+            tools.build_launch_argv(AgentKind.CODEX, which=which, autonomy_mode=AutonomyMode.AUTO),
+            ["/fake/bin/codex", "--no-daemon", "--sandbox", "workspace-write", "--ask-for-approval", "never"],
+        )
+        # 6. Codex - Sin confirmaciones (avanzado)
+        self.assertEqual(
+            tools.build_launch_argv(AgentKind.CODEX, which=which, autonomy_mode=AutonomyMode.DANGER),
+            ["/fake/bin/codex", "--no-daemon", "--dangerously-bypass-approvals-and-sandbox"],
+        )
+
+        # 7. Antigravity - Normal
+        self.assertEqual(
+            tools.build_launch_argv(AgentKind.ANTIGRAVITY, which=which, autonomy_mode=AutonomyMode.NORMAL),
+            ["/fake/bin/agy"],
+        )
+        # 8. Antigravity - Automático
+        self.assertEqual(
+            tools.build_launch_argv(AgentKind.ANTIGRAVITY, which=which, autonomy_mode=AutonomyMode.AUTO),
+            ["/fake/bin/agy", "--mode=accept-edits"],
+        )
+        # 9. Antigravity - Sin confirmaciones (avanzado)
+        self.assertEqual(
+            tools.build_launch_argv(AgentKind.ANTIGRAVITY, which=which, autonomy_mode=AutonomyMode.DANGER),
+            ["/fake/bin/agy", "--mode=accept-edits", "--dangerously-skip-permissions"],
+        )
+
+    def test_autonomy_modes_with_context_and_prompt(self) -> None:
+        """Autonomía combinada con el puente del Cerebro Compartido y transferencia de prompts."""
+        which = which_with("claude", "codex", "agy")
+        ref = "Referencia del Cerebro"
+        prompt = "Crear módulo auth"
+
+        # Claude Code: auto + context + prompt
+        self.assertEqual(
+            tools.build_launch_argv(
+                AgentKind.CLAUDE_CODE,
+                which=which,
+                context=ref,
+                prompt=prompt,
+                autonomy_mode=AutonomyMode.AUTO,
+            ),
+            ["/fake/bin/claude", "--permission-mode", "auto", "--append-system-prompt", ref, "--", prompt],
+        )
+
+        # Codex: auto + context + prompt
+        self.assertEqual(
+            tools.build_launch_argv(
+                AgentKind.CODEX,
+                which=which,
+                context=ref,
+                prompt=prompt,
+                autonomy_mode=AutonomyMode.AUTO,
+            ),
+            [
+                "/fake/bin/codex",
+                "--no-daemon",
+                "--sandbox",
+                "workspace-write",
+                "--ask-for-approval",
+                "never",
+                "-c",
+                'developer_instructions="' + ref + '"',
+                "--",
+                prompt,
+            ],
+        )
+
+        # Antigravity: danger + prompt
+        self.assertEqual(
+            tools.build_launch_argv(
+                AgentKind.ANTIGRAVITY,
+                which=which,
+                prompt=prompt,
+                autonomy_mode=AutonomyMode.DANGER,
+            ),
+            ["/fake/bin/agy", "--mode=accept-edits", "--dangerously-skip-permissions", "--prompt-interactive", prompt],
+        )
 
     def test_toml_basic_string(self) -> None:
         self.assertEqual(tools.toml_basic_string('hola "mundo"'), '"hola \\"mundo\\""')

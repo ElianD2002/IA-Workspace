@@ -72,7 +72,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from ia_workspace.domain.models import AgentKind
+from ia_workspace.domain.models import AgentKind, AutonomyMode
 from ia_workspace.services.integrations import EXECUTABLES
 
 Which = Callable[[str], str | None]
@@ -293,12 +293,46 @@ def context_args(kind: AgentKind, reference: str) -> list[str]:
     raise ValueError(f"{TOOLS[kind].label} no admite instrucciones adicionales al iniciar.")
 
 
+def autonomy_args(kind: AgentKind, mode: AutonomyMode) -> list[str]:
+    """Argumentos oficiales para el nivel de autonomía y autorización (fase 4).
+
+    * Normal: sin opciones adicionales; aplica las políticas por defecto de la CLI.
+    * Automático:
+        - Claude Code: --permission-mode auto (reduce confirmaciones repetitivas).
+        - Codex: --sandbox workspace-write --ask-for-approval never (sandbox de escritura en
+          el workspace sin pedir confirmación; fallos de sandbox se devuelven al modelo).
+        - Antigravity: --mode=accept-edits (acepta ediciones de archivos automáticamente).
+    * Sin confirmaciones (avanzado):
+        - Claude Code: --dangerously-skip-permissions.
+        - Codex: --dangerously-bypass-approvals-and-sandbox.
+        - Antigravity: --mode=accept-edits --dangerously-skip-permissions.
+    """
+    if mode is AutonomyMode.NORMAL:
+        return []
+    if mode is AutonomyMode.AUTO:
+        if kind is AgentKind.CLAUDE_CODE:
+            return ["--permission-mode", "auto"]
+        if kind is AgentKind.CODEX:
+            return ["--sandbox", "workspace-write", "--ask-for-approval", "never"]
+        if kind is AgentKind.ANTIGRAVITY:
+            return ["--mode=accept-edits"]
+    elif mode is AutonomyMode.DANGER:
+        if kind is AgentKind.CLAUDE_CODE:
+            return ["--dangerously-skip-permissions"]
+        if kind is AgentKind.CODEX:
+            return ["--dangerously-bypass-approvals-and-sandbox"]
+        if kind is AgentKind.ANTIGRAVITY:
+            return ["--mode=accept-edits", "--dangerously-skip-permissions"]
+    return []
+
+
 def build_launch_argv(
     kind: AgentKind,
     extra: tuple[str, ...] = (),
     prompt: str | None = None,
     which: Which = shutil.which,
     context: str | None = None,
+    autonomy_mode: AutonomyMode = AutonomyMode.NORMAL,
 ) -> list[str]:
     """Comando de la sesión interactiva oficial. El directorio lo fija la terminal.
 
@@ -311,11 +345,16 @@ def build_launch_argv(
 
     ``context`` es la referencia al Cerebro: se añade una sola vez, con el mecanismo oficial
     de la herramienta (``context_args``), antes del prompt.
+
+    ``autonomy_mode`` define el nivel de autorización y confirmaciones configurado por el
+    usuario para este proyecto (fase 4). Los flags autorizados se aplican directamente sin
+    permitir que argumentos arbitrarios eludan ``_check_safe``.
     """
     tool = TOOLS[kind]
     flags = [*tool.interactive_args, *extra]
     _check_safe(flags)
-    argv = [_resolve(tool, which), *flags]
+    auto_flags = autonomy_args(kind, autonomy_mode)
+    argv = [_resolve(tool, which), *flags, *auto_flags]
     if context is not None:
         argv += context_args(kind, context)
     if prompt is None:

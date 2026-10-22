@@ -127,7 +127,12 @@ class IAWorkspaceApplication(Adw.Application):
                         return build_login_argv(kind, which=ctx.agents.which)
                     context = spec.brain.launch_reference if spec.brain else None
                     return build_launch_argv(
-                        kind, spec.args, prompt=spec.initial_prompt, which=ctx.agents.which, context=context
+                        kind,
+                        spec.args,
+                        prompt=spec.initial_prompt,
+                        which=ctx.agents.which,
+                        context=context,
+                        autonomy_mode=spec.autonomy_mode,
                     )
 
                 return build

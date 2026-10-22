@@ -162,6 +162,22 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         "CREATE INDEX brain_proposals_project_status ON brain_proposals(project_id, status)",
         "CREATE INDEX brain_proposals_created ON brain_proposals(project_id, created_at DESC)",
     ),
+    # 7 — Autonomía y modos de autorización de agentes por proyecto (fase 4).
+    #     Configuración individual de cada agente para el proyecto:
+    #     'normal' (predeterminado), 'auto' (aprobaciones automáticas/reducidas) o
+    #     'danger' (sin confirmaciones ni sandbox, requiere confirmación expresa).
+    (
+        """
+        CREATE TABLE project_agent_modes (
+            project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            agent_kind  TEXT    NOT NULL,
+            mode        TEXT    NOT NULL DEFAULT 'normal',
+            updated_at  TEXT    NOT NULL,
+            PRIMARY KEY (project_id, agent_kind)
+        )
+        """,
+        "CREATE INDEX project_agent_modes_project ON project_agent_modes(project_id)",
+    ),
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

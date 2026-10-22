@@ -12,6 +12,7 @@ from ia_workspace.domain.models import SELECTABLE_AGENTS
 from ia_workspace.persistence.database import Database
 from ia_workspace.persistence.brain_index import BrainIndex
 from ia_workspace.persistence.repositories import (
+    AgentAutonomyRepository,
     BrainProjectRepository,
     ChatLinkRepository,
     ProjectRepository,
@@ -76,6 +77,7 @@ class AppContext:
     agents: AgentCatalog
     chat_links: ChatLinkService
     prompt_transfers: PromptTransferService
+    autonomy: AgentAutonomyRepository
     brain: BrainService | None = None  # None sin carpeta de datos (pruebas con ":memory:")
     simulated_agents: bool = False
 
@@ -105,6 +107,7 @@ class AppContext:
             agents=AgentCatalog(dispatch=dispatch),
             chat_links=ChatLinkService(ChatLinkRepository(db)),
             prompt_transfers=PromptTransferService(PromptTransferRepository(db)),
+            autonomy=AgentAutonomyRepository(db),
             brain=build_brain(db, paths) if paths is not None else None,
             simulated_agents=simulated_agents,
         )
