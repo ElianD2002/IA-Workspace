@@ -395,6 +395,9 @@ class PromptTransferTest(unittest.TestCase):
                 check(target_row is not None, "no se encontró la fila de la transferencia a Claude en Tareas")
                 if target_row is not None:
                     target_row.emit("activated")
+                    if hasattr(view_a, "_last_dialog") and view_a._last_dialog is not None:
+                        # Si abre el diálogo de detalle de tarea, probamos la acción de ir a la terminal
+                        view_a._last_dialog._open_terminal(c1)
                     check(view_a.state.selected_session == c1,
                           "la fila de Tareas no regresó a la sesión de Claude")
 

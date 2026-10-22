@@ -18,11 +18,13 @@ from ia_workspace.persistence.repositories import (
     ProjectRepository,
     PromptTransferRepository,
     SettingsRepository,
+    TaskRepository,
     WorkspaceStateRepository,
 )
 from ia_workspace.services.chat_links import ChatLinkService
 from ia_workspace.services.projects import ProjectService
 from ia_workspace.services.prompt_transfers import PromptTransferService
+from ia_workspace.services.tasks import TaskService
 from ia_workspace.services.workspace import WorkspaceController
 from ia_workspace.sessions.manager import Dispatch, Schedule, SessionManager, _direct, _no_timer
 
@@ -77,6 +79,7 @@ class AppContext:
     agents: AgentCatalog
     chat_links: ChatLinkService
     prompt_transfers: PromptTransferService
+    tasks: TaskService
     autonomy: AgentAutonomyRepository
     quotas: QuotaService | None = None
     brain: BrainService | None = None  # None sin carpeta de datos (pruebas con ":memory:")
@@ -103,6 +106,8 @@ class AppContext:
 
         quota_repo = QuotaRepository(db)
         quotas = QuotaService(repo=quota_repo, dispatch=dispatch)
+        prompt_transfers = PromptTransferService(PromptTransferRepository(db))
+        tasks = TaskService(TaskRepository(db), sessions=sessions)
         return cls(
             paths=paths,
             db=db,
@@ -112,7 +117,8 @@ class AppContext:
             sessions=sessions,
             agents=AgentCatalog(dispatch=dispatch),
             chat_links=ChatLinkService(ChatLinkRepository(db)),
-            prompt_transfers=PromptTransferService(PromptTransferRepository(db)),
+            prompt_transfers=prompt_transfers,
+            tasks=tasks,
             autonomy=AgentAutonomyRepository(db),
             quotas=quotas,
             brain=build_brain(db, paths) if paths is not None else None,
@@ -121,4 +127,5 @@ class AppContext:
 
     def close(self) -> None:
         self.workspace.flush()
+        self.tasks.close()
         self.db.close()

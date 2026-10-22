@@ -16,7 +16,7 @@ from gi.repository import Adw, Gio, GLib, Gtk, Pango
 from ia_workspace.agents.auth import AuthState
 from ia_workspace.brain.bridge import compose_prompt_with_reference, resolve_brain_link
 from ia_workspace.brain.model import Scope
-from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind, AutonomyMode, Project, PromptTransfer
+from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind, AutonomyMode, Project, PromptTransfer, Task
 from ia_workspace.services.chat_links import kind_of
 from ia_workspace.services.chatgpt_links import parse_chat_link
 from ia_workspace.services.detection import inspect_folder
@@ -791,9 +791,11 @@ class WorkspaceView(Page):
             self.ctx.sessions.send_input(info.id, initial_prompt)
 
         status = "error" if info.state is SessionState.ERROR else ("sent" if method == "direct" else "copied")
-        self.ctx.prompt_transfers.record(
+        transfer = self.ctx.prompt_transfers.record(
             self.project.id, kind, prompt, info.id, method, status, info.detail if status == "error" else ""
         )
+        if status != "error" and hasattr(self.ctx, "tasks") and self.ctx.tasks is not None:
+            self.ctx.tasks.create_for_transfer(transfer, title=title)
         if method == "manual":
             self._set_clipboard(prompt)
             self.nav.toast(f"Prompt copiado. Pégalo en la sesión de {kind.label} en cuanto esté lista.")
@@ -1360,6 +1362,8 @@ class WorkspaceView(Page):
         self._ctx_stack.set_visible_child_name(self.state.context_tab)
         pane.append(self._ctx_stack)
         self.ctx.prompt_transfers.subscribe(self._on_transfers_changed)
+        if hasattr(self.ctx, "tasks") and self.ctx.tasks is not None:
+            self.ctx.tasks.subscribe(self._on_transfers_changed)
         self._render_tasks()
         if self.ctx.brain is not None:
             self.ctx.brain.subscribe(lambda _scope, _key: self._render_memory_hint())
@@ -1400,11 +1404,47 @@ class WorkspaceView(Page):
             self._render_tasks()
 
     def _render_tasks(self) -> None:
-        transfers = self.ctx.prompt_transfers.list(self.project.id)
+        tasks = self.ctx.tasks.list_for_project(self.project.id) if hasattr(self.ctx, "tasks") and self.ctx.tasks is not None else []
         w.clear_box(self._tasks_list)
-        for transfer in transfers:
-            self._tasks_list.append(self._task_row(transfer))
-        self._tasks_stack.set_visible_child_name("list" if transfers else "empty")
+        if tasks:
+            for task in tasks:
+                self._tasks_list.append(self._task_item_row(task))
+            self._tasks_stack.set_visible_child_name("list")
+        else:
+            transfers = self.ctx.prompt_transfers.list(self.project.id)
+            for transfer in transfers:
+                self._tasks_list.append(self._task_row(transfer))
+            self._tasks_stack.set_visible_child_name("list" if transfers else "empty")
+
+    def _task_item_row(self, task: Task) -> Gtk.Widget:
+        sub = f"{task.agent.label} · {w.relative_time(task.created_at)}"
+        if task.result_notes:
+            sub = f"{sub} · Nota: {task.result_notes[:40]}"
+        row = Adw.ActionRow(
+            title=task.title,
+            subtitle=sub,
+            activatable=True,
+        )
+        row.add_prefix(w.tool_chip(task.agent))
+        row.add_suffix(w.status_pill(task.status.label, task.status.style))
+        row.set_tooltip_text("Clic para ver detalles y gestionar tarea")
+        row.connect("activated", lambda _r: self._open_task_dialog(task, source_row=row))
+        return row
+
+    def _open_task_dialog(self, task: Task, source_row: Gtk.Widget | None = None) -> None:
+        from ia_workspace.ui.dialogs.task_detail import TaskDetailDialog
+
+        dialog = TaskDetailDialog(
+            task=task,
+            ctx=self.ctx,
+            project=self.project,
+            on_open_session=lambda sid: self._select_session(sid),
+            on_toast=lambda msg: self.nav.toast(msg),
+        )
+        if source_row is not None:
+            dialog.connect("closed", lambda _d: source_row.grab_focus())
+        dialog.present(self.get_root())
+        self._last_dialog = dialog
 
     def _task_row(self, transfer: PromptTransfer) -> Gtk.Widget:
         first_line = next((line.strip() for line in transfer.prompt.splitlines() if line.strip()), transfer.prompt)

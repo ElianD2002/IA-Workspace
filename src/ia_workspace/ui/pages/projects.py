@@ -127,7 +127,12 @@ class ProjectsPage(Page):
         agents.append(chips)
         box.append(agents)
 
-        box.append(self._stat("Tareas", "0"))
+        task_count = (
+            len(self.ctx.tasks.list_for_project(project.id))
+            if hasattr(self.ctx, "tasks") and self.ctx.tasks is not None
+            else 0
+        )
+        box.append(self._stat("Tareas", str(task_count)))
         box.append(self._stat("Actividad", w.relative_time(project.last_opened_at or project.created_at)))
 
         open_btn = Gtk.Button(label="Abrir", valign=Gtk.Align.CENTER)

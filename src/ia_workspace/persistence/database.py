@@ -203,6 +203,39 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         """,
         "CREATE INDEX subscription_quotas_provider ON subscription_quotas(provider_id)",
     ),
+    # 9 — Tareas y prompts vinculados a proyectos y sesiones de agentes (fase 6B.1).
+    #     Almacena la tarea asociada a un prompt transferido con su proyecto, agente,
+    #     sesión, estado, notas del resultado y registro de trazabilidad histórica.
+    (
+        """
+        CREATE TABLE tasks (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            title        TEXT    NOT NULL CHECK (length(trim(title)) > 0),
+            transfer_id  INTEGER NOT NULL UNIQUE REFERENCES prompt_transfers(id) ON DELETE CASCADE,
+            agent        TEXT    NOT NULL,
+            session_id   TEXT,
+            status       TEXT    NOT NULL CHECK (status IN ('pending', 'in_progress', 'pending_review', 'completed', 'failed', 'canceled')),
+            result_notes TEXT    NOT NULL DEFAULT '',
+            created_at   TEXT    NOT NULL,
+            updated_at   TEXT    NOT NULL
+        )
+        """,
+        "CREATE INDEX tasks_project_status ON tasks(project_id, status)",
+        "CREATE INDEX tasks_project_updated ON tasks(project_id, updated_at DESC)",
+        "CREATE INDEX tasks_session ON tasks(session_id)",
+        """
+        CREATE TABLE task_history (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            from_status TEXT    NOT NULL,
+            to_status   TEXT    NOT NULL,
+            note        TEXT    NOT NULL DEFAULT '',
+            created_at  TEXT    NOT NULL
+        )
+        """,
+        "CREATE INDEX task_history_task ON task_history(task_id, id)",
+    ),
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

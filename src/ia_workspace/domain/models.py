@@ -179,6 +179,70 @@ class PromptTransfer:
     created_at: datetime | None = None
 
 
+class TaskState(StrEnum):
+    """Estados del ciclo de vida de una tarea vinculada a un agente (fase 6B.1)."""
+
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    PENDING_REVIEW = "pending_review"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+    @property
+    def label(self) -> str:
+        _TASK_LABELS = {
+            TaskState.PENDING: "Pendiente",
+            TaskState.IN_PROGRESS: "En progreso",
+            TaskState.PENDING_REVIEW: "Pendiente de revisión",
+            TaskState.COMPLETED: "Completada",
+            TaskState.FAILED: "Fallida",
+            TaskState.CANCELED: "Cancelada",
+        }
+        return _TASK_LABELS[self]
+
+    @property
+    def style(self) -> str:
+        _TASK_STYLES = {
+            TaskState.PENDING: "idle",
+            TaskState.IN_PROGRESS: "working",
+            TaskState.PENDING_REVIEW: "wait",
+            TaskState.COMPLETED: "done",
+            TaskState.FAILED: "error",
+            TaskState.CANCELED: "off",
+        }
+        return _TASK_STYLES[self]
+
+
+@dataclass(frozen=True)
+class TaskHistoryEntry:
+    """Registro de trazabilidad de cambios de estado de una tarea."""
+
+    id: int
+    task_id: int
+    from_status: str
+    to_status: str
+    note: str
+    created_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class Task:
+    """Tarea ejecutada por un agente en un proyecto a partir de un prompt transferido."""
+
+    id: int
+    project_id: int
+    title: str
+    transfer_id: int
+    prompt: str
+    agent: AgentKind
+    session_id: str | None
+    status: TaskState
+    result_notes: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 @dataclass
 class WorkspaceState:
     """Estado visual de un workspace. Se guarda por proyecto y nunca se comparte."""

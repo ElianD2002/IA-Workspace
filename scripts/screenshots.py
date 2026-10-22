@@ -161,6 +161,29 @@ def main() -> None:
             view._ctx_toggle.set_active_name("tasks")
             capture(win, f"{scheme}-05f-tareas")
 
+            # Diálogo flotante de detalle de tarea desde el panel derecho
+            first_task_item = view._tasks_list.get_first_child()
+            if first_task_item:
+                first_task_item.emit("activated")
+                pump(0.6)
+                capture(win, f"{scheme}-05i-dialogo-tarea")
+                if hasattr(view, "_last_dialog") and view._last_dialog:
+                    view._last_dialog.close()
+                    pump(0.3)
+
+            # Pantalla completa «Tareas y prompts»
+            win.navigate("tasks")
+            pump(0.5)
+            capture(win, f"{scheme}-05g-pantalla-tareas")
+            tasks_page = win._pages.get("tasks")
+            if tasks_page and hasattr(tasks_page, "_tasks_list"):
+                first_row = tasks_page._tasks_list.get_first_child()
+                if first_row and hasattr(first_row, "set_expanded"):
+                    first_row.set_expanded(True)
+                    pump(0.5)
+                    capture(win, f"{scheme}-05h-tarea-detalle")
+            win.open_project(ids[0])
+
             win.set_default_size(1024, 768)
             view.request_link_conversation()
             view._last_dialog.url_row.set_text("https://chatgpt.com/share/0f0e0d0c-0b0a-8000-9999-aabbccddeeff")

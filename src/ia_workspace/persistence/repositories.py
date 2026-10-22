@@ -15,6 +15,9 @@ from ia_workspace.domain.models import (
     Project,
     PromptTransfer,
     RetiredMemory,
+    Task,
+    TaskHistoryEntry,
+    TaskState,
     WorkspaceState,
 )
 from ia_workspace.persistence.database import Database
@@ -394,3 +397,168 @@ class AgentAutonomyRepository:
             except ValueError:
                 continue
         return result
+
+
+class TaskRepository:
+    """Persistencia de tareas vinculadas a proyectos, prompts y agentes (fase 6B.1)."""
+
+    def __init__(self, db: Database) -> None:
+        self._conn = db.conn
+
+    def _row(self, row: sqlite3.Row) -> Task:
+        return Task(
+            id=int(row["id"]),
+            project_id=int(row["project_id"]),
+            title=str(row["title"]),
+            transfer_id=int(row["transfer_id"]),
+            prompt=str(row["prompt"]) if "prompt" in row.keys() and row["prompt"] is not None else "",
+            agent=AgentKind(row["agent"]),
+            session_id=str(row["session_id"]) if row["session_id"] is not None else None,
+            status=TaskState(row["status"]),
+            result_notes=str(row["result_notes"]),
+            created_at=_parse_dt(row["created_at"]),
+            updated_at=_parse_dt(row["updated_at"]),
+        )
+
+    def _history_row(self, row: sqlite3.Row) -> TaskHistoryEntry:
+        return TaskHistoryEntry(
+            id=int(row["id"]),
+            task_id=int(row["task_id"]),
+            from_status=str(row["from_status"]),
+            to_status=str(row["to_status"]),
+            note=str(row["note"]),
+            created_at=_parse_dt(row["created_at"]),
+        )
+
+    def create(
+        self,
+        project_id: int,
+        title: str,
+        transfer_id: int,
+        agent: AgentKind,
+        session_id: str | None,
+        status: TaskState = TaskState.IN_PROGRESS,
+        result_notes: str = "",
+        initial_note: str = "Tarea iniciada por transferencia",
+    ) -> Task:
+        now = _now()
+        with self._conn:
+            cur = self._conn.execute(
+                """
+                INSERT INTO tasks
+                (project_id, title, transfer_id, agent, session_id, status, result_notes, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    project_id,
+                    title.strip() or "Tarea",
+                    transfer_id,
+                    agent.value,
+                    session_id,
+                    status.value,
+                    result_notes,
+                    now,
+                    now,
+                ),
+            )
+            task_id = int(cur.lastrowid)
+            self._conn.execute(
+                """
+                INSERT INTO task_history (task_id, from_status, to_status, note, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (task_id, "", status.value, initial_note, now),
+            )
+        task = self.get(task_id)
+        assert task is not None
+        return task
+
+    def get(self, task_id: int) -> Task | None:
+        query = """
+            SELECT t.*, p.prompt
+            FROM tasks t
+            LEFT JOIN prompt_transfers p ON t.transfer_id = p.id
+            WHERE t.id = ?
+        """
+        row = self._conn.execute(query, (task_id,)).fetchone()
+        return self._row(row) if row else None
+
+    def get_by_transfer_id(self, transfer_id: int) -> Task | None:
+        query = """
+            SELECT t.*, p.prompt
+            FROM tasks t
+            LEFT JOIN prompt_transfers p ON t.transfer_id = p.id
+            WHERE t.transfer_id = ?
+        """
+        row = self._conn.execute(query, (transfer_id,)).fetchone()
+        return self._row(row) if row else None
+
+    def list(
+        self,
+        project_id: int | None = None,
+        status: TaskState | None = None,
+    ) -> list[Task]:
+        """Lista tareas filtradas por proyecto y/o estado, ordenadas por actualización reciente."""
+        clauses = []
+        params: list[object] = []
+        if project_id is not None:
+            clauses.append("t.project_id = ?")
+            params.append(project_id)
+        if status is not None:
+            clauses.append("t.status = ?")
+            params.append(status.value)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        query = f"""
+            SELECT t.*, p.prompt
+            FROM tasks t
+            LEFT JOIN prompt_transfers p ON t.transfer_id = p.id
+            {where}
+            ORDER BY t.updated_at DESC, t.id DESC
+        """
+        rows = self._conn.execute(query, params).fetchall()
+        return [self._row(r) for r in rows]
+
+    def update_status(self, task_id: int, new_status: TaskState, note: str = "") -> Task | None:
+        task = self.get(task_id)
+        if task is None:
+            return None
+        now = _now()
+        with self._conn:
+            self._conn.execute(
+                "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
+                (new_status.value, now, task_id),
+            )
+            self._conn.execute(
+                """
+                INSERT INTO task_history (task_id, from_status, to_status, note, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (task_id, task.status.value, new_status.value, note, now),
+            )
+        return self.get(task_id)
+
+    def update_notes(self, task_id: int, notes: str) -> Task | None:
+        now = _now()
+        with self._conn:
+            self._conn.execute(
+                "UPDATE tasks SET result_notes = ?, updated_at = ? WHERE id = ?",
+                (notes, now, task_id),
+            )
+        return self.get(task_id)
+
+    def list_history(self, task_id: int) -> list[TaskHistoryEntry]:
+        rows = self._conn.execute(
+            "SELECT * FROM task_history WHERE task_id = ? ORDER BY id ASC",
+            (task_id,),
+        ).fetchall()
+        return [self._history_row(r) for r in rows]
+
+    def find_by_session_id(self, session_id: str) -> list[Task]:
+        query = """
+            SELECT t.*, p.prompt
+            FROM tasks t
+            LEFT JOIN prompt_transfers p ON t.transfer_id = p.id
+            WHERE t.session_id = ?
+        """
+        rows = self._conn.execute(query, (session_id,)).fetchall()
+        return [self._row(r) for r in rows]

@@ -39,6 +39,9 @@ class HomePage(Page):
         if hasattr(self.ctx, "prompt_transfers") and hasattr(self.ctx.prompt_transfers, "subscribe"):
             unsub = self.ctx.prompt_transfers.subscribe(lambda *_: GLib.idle_add(self.refresh))
             self._unsubscribers.append(unsub)
+        if hasattr(self.ctx, "tasks") and hasattr(self.ctx.tasks, "subscribe"):
+            unsub = self.ctx.tasks.subscribe(lambda *_: GLib.idle_add(self.refresh))
+            self._unsubscribers.append(unsub)
         if hasattr(self.ctx, "brain") and hasattr(self.ctx.brain, "subscribe"):
             unsub = self.ctx.brain.subscribe(lambda *_: GLib.idle_add(self.refresh))
             self._unsubscribers.append(unsub)

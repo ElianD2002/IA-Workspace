@@ -262,3 +262,24 @@ progressbar.error > trough > progress {
   color: var(--success-color, @success_color);
   margin-right: 2px;
 }
+
+/* ---- Módulo Tareas y prompts (Fase 6B.1) ---- */
+.task-prompt-box {
+  background-color: color-mix(in srgb, currentColor 5%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 8%, transparent);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: "JetBrains Mono", "Adwaita Mono", monospace;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.task-detail-section {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background-color: color-mix(in srgb, currentColor 3%, transparent);
+}
+.task-history-row {
+  font-size: 11.5px;
+  padding: 3px 0;
+  opacity: 0.8;
+}
