@@ -9,16 +9,22 @@ from ia_workspace.context import AppContext
 from ia_workspace.ui import widgets as w
 
 SCHEME_KEY = "appearance.scheme"
+# (clave guardada, título, descripción, esquema de Libadwaita). Las claves son las de
+# siempre ("system", "light", "dark"), así que la elección anterior se conserva.
 SCHEMES = (
-    ("system", "Predeterminado del sistema", Adw.ColorScheme.DEFAULT),
-    ("light", "Claro", Adw.ColorScheme.FORCE_LIGHT),
-    ("dark", "Oscuro", Adw.ColorScheme.FORCE_DARK),
+    ("system", "Automático (sistema)", "Sigue el modo claro u oscuro de GNOME", Adw.ColorScheme.DEFAULT),
+    ("light", "Catppuccin Latte", "Apariencia clara", Adw.ColorScheme.FORCE_LIGHT),
+    ("dark", "Catppuccin Mocha", "Apariencia oscura", Adw.ColorScheme.FORCE_DARK),
 )
 
 
 def apply_color_scheme(ctx: AppContext) -> None:
+    """Aplica la apariencia guardada solo a IA Workspace (``Adw.StyleManager``; GNOME no
+    cambia). Latte/Mocha se aplican a la interfaz y a las terminales al notificar
+    ``notify::dark`` (``ui/theme.py`` y ``terminal/theme.py``); en Automático,
+    Libadwaita sigue el modo del sistema y sus cambios llegan por la misma señal."""
     name = ctx.settings.get(SCHEME_KEY, "system")
-    scheme = next((s for key, _l, s in SCHEMES if key == name), Adw.ColorScheme.DEFAULT)
+    scheme = next((s for key, _l, _d, s in SCHEMES if key == name), Adw.ColorScheme.DEFAULT)
     Adw.StyleManager.get_default().set_color_scheme(scheme)
 
 
@@ -32,13 +38,23 @@ class PreferencesDialog(Adw.PreferencesDialog):
     def _general_page(self) -> Adw.PreferencesPage:
         page = Adw.PreferencesPage(title="General", icon_name="preferences-system-symbolic")
 
-        appearance = Adw.PreferencesGroup(title="Apariencia")
-        model = Gtk.StringList.new([label for _k, label, _s in SCHEMES])
+        appearance = Adw.PreferencesGroup(
+            title="Apariencia",
+            description="Solo afecta a IA Workspace y a sus terminales; GNOME no cambia.",
+        )
         current = self.ctx.settings.get(SCHEME_KEY, "system")
-        row = Adw.ComboRow(title="Estilo", model=model)
-        row.set_selected(next((i for i, (k, _l, _s) in enumerate(SCHEMES) if k == current), 0))
-        row.connect("notify::selected", self._on_scheme)
-        appearance.add(row)
+        if current not in {k for k, *_ in SCHEMES}:
+            current = "system"
+        self.scheme_checks: dict[str, Gtk.CheckButton] = {}
+        leader: Gtk.CheckButton | None = None
+        for key, title, subtitle, _scheme in SCHEMES:
+            check = Gtk.CheckButton(group=leader, active=key == current, valign=Gtk.Align.CENTER)
+            leader = leader or check
+            row = Adw.ActionRow(title=title, subtitle=subtitle, activatable_widget=check)
+            row.add_prefix(check)
+            check.connect("toggled", self._on_scheme, key)
+            self.scheme_checks[key] = check
+            appearance.add(row)
         page.add(appearance)
 
         behaviour = Adw.PreferencesGroup(
@@ -49,6 +65,15 @@ class PreferencesDialog(Adw.PreferencesDialog):
                 "y se finalizan de forma ordenada."
             ),
         )
+        copy_row = Adw.SwitchRow(
+            title="Copiar al seleccionar en terminales",
+            subtitle="Copia automáticamente al soltar la selección del ratón",
+        )
+        copy_on_select = self.ctx.settings.get("terminal.copy_on_select", "true") != "false"
+        copy_row.set_active(copy_on_select)
+        copy_row.connect("notify::active", self._on_copy_on_select)
+        self.copy_on_select_row = copy_row
+        behaviour.add(copy_row)
         page.add(behaviour)
 
         data = Adw.PreferencesGroup(title="Ubicación de los datos")
@@ -59,10 +84,15 @@ class PreferencesDialog(Adw.PreferencesDialog):
         page.add(data)
         return page
 
-    def _on_scheme(self, row: Adw.ComboRow, _pspec: object) -> None:
-        key = SCHEMES[row.get_selected()][0]
+    def _on_scheme(self, check: Gtk.CheckButton, key: str) -> None:
+        if not check.get_active():
+            return  # el grupo también avisa de la opción que se desmarca
         self.ctx.settings.set(SCHEME_KEY, key)
         apply_color_scheme(self.ctx)
+
+    def _on_copy_on_select(self, row: Adw.SwitchRow, _pspec: object) -> None:
+        val = row.get_active()
+        self.ctx.settings.set("terminal.copy_on_select", "true" if val else "false")
 
     def _integrations_page(self) -> Adw.PreferencesPage:
         page = Adw.PreferencesPage(title="Integraciones", icon_name="network-wired-symbolic")

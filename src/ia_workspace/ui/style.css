@@ -98,9 +98,9 @@ button.status-pill {
   background-color: color-mix(in srgb, currentColor 55%, transparent);
 }
 .status-dot.working { background-color: var(--accent-bg-color); }
-.status-dot.wait { background-color: #e5a50a; }
-.status-dot.done { background-color: #26a269; }
-.status-dot.error { background-color: #e01b24; }
+.status-dot.wait { background-color: var(--warning-color); }
+.status-dot.done { background-color: var(--success-color); }
+.status-dot.error { background-color: var(--error-color); }
 
 /* ---- Barra lateral ---- */
 .sidebar-section {
@@ -168,10 +168,10 @@ button.status-pill {
   padding: 4px 0;
 }
 progressbar.warning > trough > progress {
-  background-color: #e5a50a;
+  background-color: var(--warning-color);
 }
 progressbar.error > trough > progress {
-  background-color: #e01b24;
+  background-color: var(--error-color);
 }
 
 .sim-label {
@@ -214,4 +214,51 @@ progressbar.error > trough > progress {
 /* ---- Cerebro compartido: tarjetas de documento (como .card del prototipo) ---- */
 .brain-card {
   padding: 14px 16px;
+}
+
+/* ---- Inicio Rediseñado (Fase 6A) ---- */
+.summary-kpi-card {
+  padding: 0;
+  border-radius: 12px;
+  background-color: color-mix(in srgb, currentColor 4%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 8%, transparent);
+}
+.summary-kpi-card:hover {
+  background-color: color-mix(in srgb, currentColor 8%, transparent);
+}
+.kpi-icon-box {
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: 10px;
+  background-color: color-mix(in srgb, var(--accent-bg-color) 15%, transparent);
+  color: var(--accent-color);
+}
+.kpi-value {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.project-card {
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, currentColor 8%, transparent);
+  background-color: color-mix(in srgb, currentColor 3%, transparent);
+}
+.project-card:hover {
+  background-color: color-mix(in srgb, currentColor 6%, transparent);
+}
+
+/* ---- Notificación Ghostty de copiado en terminales VTE ---- */
+.terminal-copy-badge {
+  background-color: var(--card-bg-color, @card_bg_color);
+  color: var(--card-fg-color, @card_fg_color);
+  border: 1px solid var(--border-color, @border_color);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.terminal-copy-badge image {
+  color: var(--success-color, @success_color);
+  margin-right: 2px;
 }

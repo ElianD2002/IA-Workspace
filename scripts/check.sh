@@ -76,6 +76,9 @@ run_ui_test test_brain_bridge_ui "Puente de contexto del Cerebro a agentes"
 run_ui_test test_brain_proposals_ui "Propuestas del Cerebro"
 run_ui_test test_clipboard "Portapapeles y menús contextuales"
 run_ui_test test_quotas_ui "Panel visual de consumo de suscripciones"
+run_ui_test test_home_ui "Rediseño del Inicio"
+run_ui_test test_catppuccin_copy "Catppuccin y Copiar al seleccionar en VTE"
+run_ui_test test_copy_on_select_ui "Copiar al seleccionar con ratón real y selector de Apariencia"
 
 # Ningún dato de cuenta (de los dobles de prueba) debe acabar en registros.
 if grep -rIl -E "persona@example\.invalid|FAKE-ORG-SECRET-123|sim_session_7f3a" "$ROOT/var"/*.log 2>/dev/null; then

@@ -115,7 +115,7 @@ class IAWorkspaceApplication(Adw.Application):
             return
         assert self.ctx is not None
         ctx = self.ctx
-        backends = [VteTerminalBackend()]
+        backends = [VteTerminalBackend(settings=ctx.settings)]
         if not ctx.simulated_agents:
             # Agentes reales: su CLI oficial dentro de una terminal VTE. En modo simulado
             # (desarrollo y pruebas) nunca se lanzan, para no consumir sesiones de IA.
@@ -133,7 +133,9 @@ class IAWorkspaceApplication(Adw.Application):
                             statusline_script = Path(__file__).resolve().parents[2] / "scripts" / "iaw-claude-statusline"
                             if statusline_script.is_file():
                                 project_dir = Path(spec.cwd) if spec.cwd else None
-                                extra_args.extend(get_claude_launch_settings(statusline_script, project_dir=project_dir))
+                                claude_cfg = get_claude_launch_settings(statusline_script, project_dir=project_dir)
+                                for k, v in claude_cfg.items():
+                                    extra_args.extend(["--config", f"{k}={v}"])
                         except Exception:
                             pass
                     return build_launch_argv(
@@ -147,7 +149,7 @@ class IAWorkspaceApplication(Adw.Application):
 
                 return build
 
-            backends += [VteTerminalBackend(kind, argv_for(kind)) for kind in SELECTABLE_AGENTS]
+            backends += [VteTerminalBackend(kind, argv_for(kind), settings=ctx.settings) for kind in SELECTABLE_AGENTS]
         for backend in backends:
             ctx.sessions.register_backend(backend)
         self.terminal_backends = backends
@@ -166,12 +168,16 @@ class IAWorkspaceApplication(Adw.Application):
         Gtk.Window.set_default_icon_name(APP_ID)
 
     def _load_css(self) -> None:
+        from ia_workspace.ui.theme import setup_theme
+
+        display = Gdk.Display.get_default()
+        setup_theme(display)
+
         provider = Gtk.CssProvider()
         provider.load_from_path(str(Path(__file__).parent / "ui" / "style.css"))
-        display = Gdk.Display.get_default()
         if display is not None:
             Gtk.StyleContext.add_provider_for_display(
-                display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+                display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1
             )
 
     # ---- acciones --------------------------------------------------------------

@@ -1146,9 +1146,22 @@ class WorkspaceView(Page):
             return None
         host = Gtk.ScrolledWindow(child=terminal, hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
         host.add_css_class("terminal-host")
-        self._output_stack.add_named(host, info.id)
-        self._terminal_hosts[info.id] = host
-        return host
+
+        handle = self.ctx.sessions.handle(info.id)
+        if hasattr(handle, "copy_revealer"):
+            overlay = Gtk.Overlay(vexpand=True, hexpand=True)
+            overlay.set_child(host)
+            notif = handle.copy_revealer()
+            if notif.get_parent() is not None:
+                notif.unparent()
+            overlay.add_overlay(notif)
+            container: Gtk.Widget = overlay
+        else:
+            container = host
+
+        self._output_stack.add_named(container, info.id)
+        self._terminal_hosts[info.id] = container
+        return container
 
     def _state_label(self, info: SessionInfo) -> str:
         return w.session_label(info.state, info.id in self._terminal_hosts)
