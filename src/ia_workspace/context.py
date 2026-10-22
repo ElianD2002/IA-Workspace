@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from ia_workspace.agents.catalog import AgentCatalog
@@ -34,6 +35,32 @@ def build_brain(db: Database, paths: AppPaths) -> BrainService:
         BrainProjectRepository(db),
         project_name=lambda pid: (p.name if (p := projects.get(pid)) is not None else None),
     )
+
+
+def build_readonly_brain(paths: AppPaths) -> tuple[BrainService, ProjectRepository, Callable[[], None]]:
+    """Cerebro de solo lectura para la CLI de los agentes: no escribe nada en disco.
+
+    Proyectos y memorias se leen de la base real en solo lectura; el índice de búsqueda es
+    una base temporal en memoria construida a partir de los Markdown (la fuente canónica).
+    Funciona aunque el agente corra en un sandbox que prohíbe escribir fuera del proyecto.
+    Devuelve el servicio, los proyectos registrados y una función para cerrar las conexiones.
+    """
+    real = Database.open_readonly(paths.database, min_version=4)
+    scratch = Database(":memory:")
+    projects = ProjectRepository(real)
+    brain = BrainService(
+        paths.data_dir / "brain",
+        BrainIndex(scratch.conn),
+        BrainProjectRepository(real),
+        project_name=lambda pid: (p.name if (p := projects.get(pid)) is not None else None),
+        readonly=True,
+    )
+
+    def close() -> None:
+        scratch.close()
+        real.close()
+
+    return brain, projects, close
 
 
 @dataclass

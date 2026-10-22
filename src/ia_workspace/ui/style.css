@@ -63,6 +63,11 @@
   font-size: 12px;
   font-weight: 700;
 }
+button.status-pill {
+  min-height: 22px;
+  padding: 1px 8px;
+  font-size: 11px;
+}
 .status-pill.working {
   color: var(--accent-color);
   background-color: color-mix(in srgb, var(--accent-bg-color) 20%, transparent);

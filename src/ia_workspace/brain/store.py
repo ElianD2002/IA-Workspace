@@ -26,8 +26,14 @@ class UnsafePathError(BrainError):
 
 
 class BrainStore:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, readonly: bool = False) -> None:
         self.root = Path(root)
+        # Solo lectura (CLI de los agentes): nunca crea carpetas ni escribe archivos.
+        self.readonly = readonly
+
+    def _check_writable(self) -> None:
+        if self.readonly:
+            raise BrainError("La memoria está abierta en modo de solo lectura.")
 
     # ---- raíces ---------------------------------------------------------------------
 
@@ -45,7 +51,8 @@ class BrainStore:
         for part in (self.root, root.parent, root):
             if part.is_symlink():
                 raise UnsafePathError("La carpeta de memoria no puede ser un enlace simbólico.")
-        root.mkdir(parents=True, exist_ok=True)
+        if not self.readonly:
+            root.mkdir(parents=True, exist_ok=True)
         return root
 
     # ---- validación de rutas ----------------------------------------------------------
@@ -95,6 +102,7 @@ class BrainStore:
 
     def write_text(self, scope: Scope, project_key: str, relpath: str, text: str) -> Path:
         """Escritura atómica: un archivo temporal en la misma carpeta y ``os.replace``."""
+        self._check_writable()
         self.ensure_root(scope, project_key)
         path = self.resolve(scope, project_key, relpath)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -112,6 +120,8 @@ class BrainStore:
 
     def write_index(self, scope: Scope, project_key: str, text: str) -> bool:
         """Reescribe INDEX.md solo si cambió (evita tocar la fecha sin motivo)."""
+        if self.readonly:
+            return False
         root = self.ensure_root(scope, project_key)
         path = root / INDEX_FILENAME
         if path.is_symlink():
@@ -126,6 +136,7 @@ class BrainStore:
 
     def move_to_trash(self, scope: Scope, project_key: str, relpath: str) -> Path:
         """Elimina un documento moviéndolo a la papelera de la memoria (recuperable)."""
+        self._check_writable()
         path = self.resolve(scope, project_key, relpath)
         if not path.is_file():
             raise BrainError("El documento ya no existe.")

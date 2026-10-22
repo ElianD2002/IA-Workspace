@@ -14,6 +14,7 @@ import os
 from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
 from ia_workspace.agents.auth import AuthState
+from ia_workspace.brain.bridge import compose_prompt_with_reference, resolve_brain_link
 from ia_workspace.brain.model import Scope
 from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind, Project, PromptTransfer
 from ia_workspace.services.chat_links import kind_of
@@ -22,7 +23,7 @@ from ia_workspace.services.detection import inspect_folder
 from ia_workspace.services.web_policy import resolve_for_view, test_base_url
 from ia_workspace.sessions.backend import ViewableHandle
 from ia_workspace.sessions.manager import SessionError
-from ia_workspace.sessions.models import SessionEvent, SessionInfo, SessionSpec, SessionState
+from ia_workspace.sessions.models import BrainLink, BrainLinkStatus, SessionEvent, SessionInfo, SessionSpec, SessionState
 from ia_workspace.ui import widgets as w
 from ia_workspace.ui.chatgpt_browser import WEBKIT_AVAILABLE
 from ia_workspace.ui.pages.base import Navigator, Page
@@ -668,6 +669,25 @@ class WorkspaceView(Page):
 
     def request_transfer(self) -> None:
         """Abre el diálogo de revisión antes de transferir el prompt al agente elegido."""
+        self._transfer_prompt()
+
+    def _brain_link(self, kind: AgentKind, *, into_prompt: bool = False) -> BrainLink | None:
+        try:
+            return resolve_brain_link(self.project, kind, self.ctx.brain, into_prompt=into_prompt)
+        except Exception as exc:
+            return BrainLink(
+                status=BrainLinkStatus.UNAVAILABLE,
+                detail=f"Error al enlazar el Cerebro: {exc}",
+            )
+
+    def _copy_brain_ref(self, ref: str | None) -> None:
+        if not ref:
+            return
+        self._set_clipboard(ref)
+        self.nav.toast("Referencia al Cerebro copiada al portapapeles.")
+
+    def _transfer_prompt(self) -> None:
+        """Abre el diálogo de revisión antes de transferir el prompt al agente elegido."""
         kind = self._selected_agent()
         prompt = self.state.prompt_draft.strip()
         if kind is None:
@@ -679,26 +699,37 @@ class WorkspaceView(Page):
         from ia_workspace.ui.dialogs.transfer_prompt import TransferPromptDialog
 
         direct = self.ctx.agents.status(kind).tool.supports_direct_prompt
+        brain_link = self._brain_link(kind)
         dialog = TransferPromptDialog(
             project_name=self.project.name,
             project_path=self.project.path,
             kind=kind,
             prompt=prompt,
             direct=direct,
-            on_confirm=lambda method: self._execute_transfer(kind, prompt, method),
+            brain_link=brain_link,
+            on_confirm=lambda method, include_brain=False: self._execute_transfer(
+                kind, prompt, method, include_brain=include_brain
+            ),
         )
         dialog.present(self.get_root())
         self._last_dialog = dialog
 
-    def _execute_transfer(self, kind: AgentKind, prompt: str, method: str) -> None:
+    def _execute_transfer(
+        self, kind: AgentKind, prompt: str, method: str, include_brain: bool = False
+    ) -> None:
         self._agent_seq[kind] = self._agent_seq.get(kind, 0) + 1
         title = prompt.splitlines()[0][:60] if method == "direct" else f"{kind.label} {self._agent_seq[kind]}"
+        brain = self._brain_link(kind, into_prompt=include_brain)
+        initial_prompt = prompt
+        if method == "direct" and include_brain and brain and brain.reference:
+            initial_prompt = compose_prompt_with_reference(prompt, brain.reference)
         spec = SessionSpec(
             project_id=self.project.id,
             kind=kind,
             cwd=self.project.path,
             title=title,
-            initial_prompt=prompt if method == "direct" else None,
+            initial_prompt=initial_prompt if method == "direct" else None,
+            brain=brain,
         )
         try:
             info = self.ctx.sessions.start(spec)
@@ -711,7 +742,7 @@ class WorkspaceView(Page):
             # El backend simulado no entiende el prompt incrustado en el argv de la CLI
             # (no lanza ninguna CLI): se lo escribimos a la sesión que acabamos de crear,
             # nunca a una ya existente.
-            self.ctx.sessions.send_input(info.id, prompt)
+            self.ctx.sessions.send_input(info.id, initial_prompt)
 
         status = "error" if info.state is SessionState.ERROR else ("sent" if method == "direct" else "copied")
         self.ctx.prompt_transfers.record(
@@ -768,6 +799,8 @@ class WorkspaceView(Page):
         status_bar = Gtk.Box(spacing=10, margin_start=12, margin_end=10, margin_top=8, margin_bottom=8)
         self._session_pill_holder = Gtk.Box(spacing=6)
         status_bar.append(self._session_pill_holder)
+        self._brain_pill_holder = Gtk.Box(spacing=6)
+        status_bar.append(self._brain_pill_holder)
         self._session_title = Gtk.Label(xalign=0, hexpand=True, ellipsize=Pango.EllipsizeMode.END)
         self._session_title.add_css_class("heading")
         status_bar.append(self._session_title)
@@ -921,8 +954,14 @@ class WorkspaceView(Page):
         else:
             self._agent_seq[kind] = self._agent_seq.get(kind, 0) + 1
             title = f"{kind.label} {self._agent_seq[kind]}"
-        spec = SessionSpec(project_id=self.project.id, kind=kind, cwd=self.project.path, title=title,
-                           mode="login" if login else "interactive")
+        spec = SessionSpec(
+            project_id=self.project.id,
+            kind=kind,
+            cwd=self.project.path,
+            title=title,
+            mode="login" if login else "interactive",
+            brain=None if login else self._brain_link(kind),
+        )
         try:
             info = self.ctx.sessions.start(spec)
         except SessionError as exc:
@@ -939,8 +978,13 @@ class WorkspaceView(Page):
         prompt = self.state.prompt_draft.strip() if with_prompt else ""
         title = prompt.splitlines()[0][:60] if prompt else f"Sesión de {kind.label}"
         try:
-            info = self.ctx.sessions.start(SessionSpec(project_id=self.project.id, kind=kind,
-                                                       cwd=self.project.path, title=title))
+            info = self.ctx.sessions.start(SessionSpec(
+                project_id=self.project.id,
+                kind=kind,
+                cwd=self.project.path,
+                title=title,
+                brain=self._brain_link(kind),
+            ))
         except SessionError as exc:
             self.nav.toast(str(exc))
             return
@@ -1089,6 +1133,8 @@ class WorkspaceView(Page):
         selected = self._selected_info()
         if selected is None:
             self._session_stack.set_visible_child_name("empty")
+            w.clear_box(self._session_pill_holder)
+            w.clear_box(self._brain_pill_holder)
             return
         self._session_stack.set_visible_child_name("session")
         w.clear_box(self._session_pill_holder)
@@ -1096,6 +1142,29 @@ class WorkspaceView(Page):
             w.status_pill(self._state_label(selected), w.STATE_STYLE[selected.state],
                           spinning=selected.state is SessionState.WORKING)
         )
+        w.clear_box(self._brain_pill_holder)
+        if selected.spec.brain is not None:
+            b = selected.spec.brain
+            if b.status is BrainLinkStatus.APPLIED:
+                btn = Gtk.Button(label="Referencia aplicada")
+                btn.add_css_class("flat")
+                btn.add_css_class("status-pill")
+                btn.add_css_class("done")
+                btn.set_tooltip_text(f"{b.detail}\nHaz clic para copiar la referencia al portapapeles.")
+                btn.connect("clicked", lambda _b, ref=b.reference: self._copy_brain_ref(ref))
+                self._brain_pill_holder.append(btn)
+            elif b.status is BrainLinkStatus.COPY:
+                btn = Gtk.Button(label="Disponible para copiar")
+                btn.add_css_class("flat")
+                btn.add_css_class("status-pill")
+                btn.add_css_class("wait")
+                btn.set_tooltip_text(f"{b.detail}\nHaz clic para copiar la referencia al portapapeles.")
+                btn.connect("clicked", lambda _b, ref=b.reference: self._copy_brain_ref(ref))
+                self._brain_pill_holder.append(btn)
+            elif b.status is BrainLinkStatus.UNAVAILABLE:
+                pill = w.status_pill("No disponible", "off")
+                pill.set_tooltip_text(b.detail)
+                self._brain_pill_holder.append(pill)
         is_terminal = selected.id in self._terminal_hosts
         if self.ctx.simulated_agents and not is_terminal:
             sim = Gtk.Label(label="SIMULADA")

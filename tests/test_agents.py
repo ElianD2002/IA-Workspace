@@ -72,6 +72,53 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual(tools.build_launch_argv(AgentKind.CLAUDE_CODE, ("--continue",), which=which),
                          ["/fake/bin/claude", "--continue"])
 
+    def test_launch_with_brain_context(self) -> None:
+        which = which_with("claude", "codex", "agy")
+        ref = "Memoria de «Alfa»: busca con iaw-brain search"
+        # Claude Code: --append-system-prompt
+        self.assertEqual(
+            tools.build_launch_argv(AgentKind.CLAUDE_CODE, which=which, context=ref),
+            ["/fake/bin/claude", "--append-system-prompt", ref],
+        )
+        self.assertEqual(
+            tools.build_launch_argv(AgentKind.CLAUDE_CODE, which=which, context=ref, prompt="mi tarea"),
+            ["/fake/bin/claude", "--append-system-prompt", ref, "--", "mi tarea"],
+        )
+        # Codex CLI: -c developer_instructions="..."
+        codex_argv = tools.build_launch_argv(AgentKind.CODEX, which=which, context=ref)
+        self.assertEqual(
+            codex_argv,
+            ["/fake/bin/codex", "--no-daemon", "-c", 'developer_instructions="' + ref + '"'],
+        )
+        self.assertEqual(
+            tools.build_launch_argv(AgentKind.CODEX, which=which, context=ref, prompt="mi tarea"),
+            ["/fake/bin/codex", "--no-daemon", "-c", 'developer_instructions="' + ref + '"', "--", "mi tarea"],
+        )
+        # Antigravity: no admite contexto por argumento de inicio
+        with self.assertRaises(ValueError):
+            tools.build_launch_argv(AgentKind.ANTIGRAVITY, which=which, context=ref)
+
+    def test_toml_basic_string(self) -> None:
+        self.assertEqual(tools.toml_basic_string('hola "mundo"'), '"hola \\"mundo\\""')
+        self.assertEqual(tools.toml_basic_string("salto\nlinea"), '"salto\\u000alinea"')
+        self.assertEqual(tools.toml_basic_string("barra\\inversa"), '"barra\\\\inversa"')
+
+    def test_codex_defines_developer_instructions(self) -> None:
+        from helpers import temp_dir
+
+        with temp_dir() as folder:
+            root = Path(folder)
+            # Sin configuración
+            self.assertFalse(tools.codex_defines_developer_instructions(str(root), env={"CODEX_HOME": str(root / "home")}))
+            # Con configuración que no define developer_instructions
+            codex_home = root / "home"
+            codex_home.mkdir()
+            (codex_home / "config.toml").write_text('model = "gpt-5"\n')
+            self.assertFalse(tools.codex_defines_developer_instructions(str(root), env={"CODEX_HOME": str(codex_home)}))
+            # Con configuración que sí define developer_instructions
+            (codex_home / "config.toml").write_text('developer_instructions = "propias"\n')
+            self.assertTrue(tools.codex_defines_developer_instructions(str(root), env={"CODEX_HOME": str(codex_home)}))
+
 
 class AuthTests(unittest.TestCase):
     def test_claude_parser(self) -> None:

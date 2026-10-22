@@ -67,6 +67,32 @@ _LABELS = {
 }
 
 
+class BrainLinkStatus(StrEnum):
+    APPLIED = "applied"  # la sesión recibió la referencia al iniciarse
+    COPY = "copy"  # no hay mecanismo seguro: la referencia se ofrece para copiar
+    UNAVAILABLE = "unavailable"  # no hay memoria o no hay Cerebro
+
+
+@dataclass(frozen=True)
+class BrainLink:
+    """Cómo se presenta el Cerebro a una sesión nueva de agente (fase 3B).
+
+    ``reference`` es la referencia mínima (índice y orden de consulta), nunca el contenido
+    de la memoria. Con ``APPLIED`` y ``via_launch`` se pasa una sola vez en la línea de
+    órdenes al lanzar la CLI; ``via_launch=False`` indica que se incluyó explícitamente al
+    principio del prompt transferido.
+    """
+
+    status: BrainLinkStatus
+    detail: str
+    reference: str | None = None
+    via_launch: bool = False
+
+    @property
+    def launch_reference(self) -> str | None:
+        return self.reference if self.status is BrainLinkStatus.APPLIED and self.via_launch else None
+
+
 @dataclass(frozen=True)
 class SessionSpec:
     """Qué lanzar. ``cwd`` siempre es la carpeta del proyecto: aísla el contexto."""
@@ -84,6 +110,9 @@ class SessionSpec:
     # la CLI (nunca escrito después en una sesión ya en marcha). ``None`` si la
     # sesión no transfiere ningún prompt (terminal simple, inicio de sesión, etc.).
     initial_prompt: str | None = None
+    # Integración con el Cerebro (solo sesiones de agente). ``None`` en terminales e
+    # inicios de sesión.
+    brain: BrainLink | None = None
 
 
 @dataclass

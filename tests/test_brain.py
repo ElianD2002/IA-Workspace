@@ -349,10 +349,14 @@ class AgentInterfaceTests(BrainCase):
         self.add(self.ka, "reglas", "Esquema", "Contenido privado del proyecto " * 50)
         brief = self.brain.agent_brief(self.a, "iaw-brain")
         self.assertIn(str(self.brain.index_path(Scope.PROJECT, self.ka)), brief)
-        self.assertIn("iaw-brain search", brief)
-        self.assertIn("iaw-brain read", brief)
+        self.assertIn("iaw-brain", brief)
+        self.assertIn("index", brief)
+        self.assertIn("search", brief)
+        self.assertIn("read", brief)
+        self.assertIn("<ruta-relativa>", brief)
+        self.assertNotIn("<ruta-del-índice>", brief)
         self.assertNotIn("Contenido privado", brief)
-        self.assertLess(len(brief), 900)
+        self.assertLess(len(brief), 600)
 
     def run_cli(self, args: list[str], cwd: Path) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()

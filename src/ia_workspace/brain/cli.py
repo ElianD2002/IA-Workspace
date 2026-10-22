@@ -11,12 +11,19 @@ El proyecto se deduce de la carpeta actual (la del agente): la carpeta registrad
 Workspace que la contiene. No hay ninguna opción para elegir otro proyecto, así que la
 consulta solo alcanza la memoria de ese proyecto y la global. La salida es breve a
 propósito: listar y buscar nunca vuelcan el contenido completo de los documentos.
+
+Solo lectura estricta: abre la base de datos en modo lectura y construye el índice de
+búsqueda en memoria a partir de los Markdown; nunca crea ni modifica ningún archivo. Por
+eso funciona también dentro de sandboxes que prohíben escribir fuera del proyecto (el de
+Codex, por ejemplo) y nunca crea la memoria de un proyecto que aún no la tiene.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import shlex
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -27,9 +34,11 @@ EXIT_NO_PROJECT = 2
 
 
 def cli_command() -> str:
-    """Orden que se indica a los agentes para consultar la memoria."""
+    """Orden absoluta que se indica a los agentes para consultar la memoria (lista para shell)."""
     wrapper = Path(__file__).resolve().parents[3] / "scripts" / "iaw-brain"
-    return str(wrapper) if wrapper.is_file() else "python3 -m ia_workspace.brain"
+    if wrapper.is_file():
+        return shlex.quote(str(wrapper))
+    return f"{shlex.quote(sys.executable)} -m ia_workspace.brain"
 
 
 def find_project(projects, directory: Path):
@@ -75,25 +84,33 @@ def _meta_dict(meta) -> dict:
 def main(argv: list[str] | None = None, cwd: Path | None = None, out=sys.stdout, err=sys.stderr) -> int:
     args = _parser().parse_args(argv)
     from ia_workspace.config import resolve_paths
-    from ia_workspace.context import build_brain
-    from ia_workspace.persistence.database import Database
-    from ia_workspace.persistence.repositories import ProjectRepository
+    from ia_workspace.context import build_readonly_brain
 
     paths = resolve_paths()
     if not paths.database.is_file():
         print("No hay datos de IA Workspace en este equipo.", file=err)
         return EXIT_ERROR
-    db = Database(paths.database)
     try:
-        brain = build_brain(db, paths)
+        brain, projects, close = build_readonly_brain(paths)
+    except (sqlite3.Error, RuntimeError) as exc:
+        print(f"No se pudieron leer los datos de IA Workspace: {exc}", file=err)
+        return EXIT_ERROR
+    try:
         scope, key = Scope.GLOBAL, ""
         if not args.global_scope:
-            project = find_project(ProjectRepository(db).list(), cwd or Path.cwd())
+            project = find_project(projects.list(), cwd or Path.cwd())
             if project is None:
                 print("Esta carpeta no pertenece a ningún proyecto de IA Workspace "
                       "(usa --global para la memoria global).", file=err)
                 return EXIT_NO_PROJECT
-            scope, key = Scope.PROJECT, brain.project_key(project)
+            key = brain.existing_project_key(project.id)
+            if key is None:
+                if args.command == "read":
+                    print("Este proyecto todavía no tiene memoria.", file=err)
+                    return EXIT_ERROR
+                print("(este proyecto todavía no tiene memoria)", file=out)
+                return 0
+            scope = Scope.PROJECT
         valid = {c.key for c in categories_for(scope)}
         category = getattr(args, "category", None)
         if category and category not in valid:
@@ -102,7 +119,7 @@ def main(argv: list[str] | None = None, cwd: Path | None = None, out=sys.stdout,
 
         if args.command == "index":
             brain.sync(scope, key)
-            text = brain.index_path(scope, key).read_text(encoding="utf-8")
+            text = brain.render_index(scope, key)
             print(json.dumps({"index": text}, ensure_ascii=False) if args.json else text, end="" if not args.json
                   else "\n", file=out)
         elif args.command == "list":
@@ -140,7 +157,7 @@ def main(argv: list[str] | None = None, cwd: Path | None = None, out=sys.stdout,
         print(str(exc), file=err)
         return EXIT_ERROR
     finally:
-        db.close()
+        close()
 
 
 if __name__ == "__main__":

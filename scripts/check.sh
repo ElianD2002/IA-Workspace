@@ -42,7 +42,7 @@ echo "== Iconos generados a partir del original"
 python3 scripts/build_icons.py --check
 
 echo "== Pruebas de lógica"
-(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process test_agents test_fixes test_prompt_transfer test_icon test_web_policy test_brain)
+(cd tests && python3 -m unittest test_persistence test_services test_sessions test_process test_agents test_fixes test_prompt_transfer test_icon test_web_policy test_brain test_brain_bridge)
 
 source "$ROOT/scripts/_broadway.sh"
 if start_broadway; then
@@ -72,6 +72,7 @@ run_ui_test test_prompt_transfer_ui "Transferencia de prompts a agentes"
 run_ui_test test_icon_ui "Icono oficial en GTK"
 run_ui_test test_chatgpt_web_ui "ChatGPT integrado (WebKitGTK, sitio simulado)"
 run_ui_test test_brain_ui "Cerebro compartido"
+run_ui_test test_brain_bridge_ui "Puente de contexto del Cerebro a agentes"
 run_ui_test test_clipboard "Portapapeles y menús contextuales"
 
 # Ningún dato de cuenta (de los dobles de prueba) debe acabar en registros.

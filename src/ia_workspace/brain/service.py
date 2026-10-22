@@ -138,8 +138,9 @@ class BrainService:
         index: BrainIndex,
         projects: BrainProjectRepository,
         project_name: Callable[[int], str | None] = lambda _id: None,
+        readonly: bool = False,
     ) -> None:
-        self.store = BrainStore(root)
+        self.store = BrainStore(root, readonly=readonly)
         self._index = index
         self._projects = projects
         self._project_name = project_name
@@ -171,6 +172,8 @@ class BrainService:
         existing = self._projects.key_for(project.id)
         if existing:
             return existing
+        if self.store.readonly:
+            raise BrainError("Este proyecto todavía no tiene memoria.")
         while True:  # nunca reutiliza la carpeta de otra memoria (activa, retirada o huérfana)
             candidate = f"{slugify(project.name, 40)}-{secrets.token_hex(6)}"
             if not os.path.lexists(self.store.scope_root(Scope.PROJECT, candidate)):
@@ -432,17 +435,15 @@ class BrainService:
     def agent_brief(self, project: Project, command: str) -> str:
         """Lo único que recibirá un agente al empezar: dónde está el índice y cómo consultar.
 
-        Nunca incluye el contenido de la memoria.
+        Explica el uso de index, search y read recibiendo la ruta relativa de un documento específico.
+        Nunca incluye el contenido de la memoria (< 600 caracteres).
         """
         key = self.project_key(project)
         self.sync(Scope.PROJECT, key)
         return (
-            f"Memoria del proyecto «{project.name}» (IA Workspace). No la cargues entera: consulta solo "
-            "lo que necesite la tarea.\n"
-            f"- Índice (una línea por documento): {self.index_path(Scope.PROJECT, key)}\n"
-            f"- Buscar: {command} search \"<términos>\" [--category <categoría>] [--global]\n"
-            f"- Leer un documento: {command} read <ruta-del-índice> [--global]\n"
-            f"- Listar: {command} list [--category <categoría>] [--global]\n"
-            "Ejecuta estas órdenes desde la carpeta del proyecto: solo dan acceso a su memoria y a "
-            "la memoria global del usuario."
+            f"Memoria de «{project.name}» (IA Workspace). Prohibido cargarla entera por defecto.\n"
+            f"- Índice: {self.index_path(Scope.PROJECT, key)}\n"
+            f"- CLI: {command}\n"
+            "  * index: ver índice | search \"<términos>\": buscar | read <ruta-relativa>: leer documento específico\n"
+            "Ejecuta en la carpeta del proyecto: solo accede a su memoria y a la global."
         )

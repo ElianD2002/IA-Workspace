@@ -152,6 +152,33 @@ class Database:
             self.conn.execute("PRAGMA journal_mode = WAL")
         self.migrate()
 
+    @classmethod
+    def open_readonly(cls, path: Path | str, min_version: int = SCHEMA_VERSION) -> Database:
+        """Conexión de solo lectura que nunca escribe ni crea nada junto a la base.
+
+        Sirve dentro de sandboxes que prohíben escribir fuera del proyecto (p. ej. el de
+        Codex). Con la aplicación abierta existen ``-wal``/``-shm`` y basta ``mode=ro``. Con
+        la aplicación cerrada no hay WAL pendiente (todo está en el archivo principal) y se
+        abre como ``immutable``, que no necesita crear el ``-shm``. No migra: si el esquema
+        es anterior a ``min_version`` o más nuevo que el código, se rechaza.
+        """
+        db = cls.__new__(cls)
+        db.path = str(path)
+        uri = Path(path).resolve().as_uri()
+        db.conn = sqlite3.connect(f"{uri}?mode=ro", uri=True)
+        try:
+            db.conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
+        except sqlite3.OperationalError:
+            db.conn.close()
+            if Path(f"{path}-wal").exists():
+                raise
+            db.conn = sqlite3.connect(f"{uri}?mode=ro&immutable=1", uri=True)
+        db.conn.row_factory = sqlite3.Row
+        if not min_version <= db.version <= SCHEMA_VERSION:
+            db.conn.close()
+            raise RuntimeError("Los datos de IA Workspace usan otra versión: abre la aplicación para actualizarlos.")
+        return db
+
     @property
     def version(self) -> int:
         return int(self.conn.execute("PRAGMA user_version").fetchone()[0])
