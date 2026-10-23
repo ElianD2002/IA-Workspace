@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=IA Workspace — Recuperación
+Comment=Recuperación y restauración segura fuera de línea de respaldos de IA Workspace
+Exec=iaw-restore-gui %f
+Icon=io.github.elianmartinez.IAWorkspace
+Terminal=false
+Categories=Utility;GTK;GNOME;
+Keywords=IA;respaldo;recuperación;restaurar;backup;restore;
+StartupNotify=true
+StartupWMClass=io.github.elianmartinez.IAWorkspace.RestoreAssistant
+DBusActivatable=false
+NoDisplay=false

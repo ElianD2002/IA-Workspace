@@ -166,7 +166,7 @@ class RestoreAssistantWindow(Adw.ApplicationWindow):
             title="Ningún respaldo seleccionado",
             subtitle="Elige un archivo .tar.gz para inspeccionar su integridad",
         )
-        self._file_row.set_icon_name("document-save-symbolic")
+        self._file_row.add_prefix(Gtk.Image.new_from_icon_name("document-save-symbolic"))
 
         # Botón para abrir diálogo de archivo
         self._btn_browse = Gtk.Button(label="Seleccionar…", valign=Gtk.Align.CENTER)
@@ -219,7 +219,7 @@ class RestoreAssistantWindow(Adw.ApplicationWindow):
             subtitle="Cierra la aplicación principal y cualquier terminal activa antes de continuar. "
                      "La restauración requiere acceso exclusivo y será rechazada si la aplicación sigue en ejecución.",
         )
-        close_warn_row.set_icon_name("security-high-symbolic")
+        close_warn_row.add_prefix(Gtk.Image.new_from_icon_name("security-high-symbolic"))
         grp_confirm.add(close_warn_row)
 
         warn_row = Adw.ActionRow(
@@ -227,7 +227,7 @@ class RestoreAssistantWindow(Adw.ApplicationWindow):
             subtitle="Se reemplazarán la base SQLite y las notas del Cerebro Compartido. "
                      "El código de proyectos externos y las sesiones de WebKit se conservan intactos.",
         )
-        warn_row.set_icon_name("dialog-warning-symbolic")
+        warn_row.add_prefix(Gtk.Image.new_from_icon_name("dialog-warning-symbolic"))
         warn_row.add_css_class("warning")
         grp_confirm.add(warn_row)
 
