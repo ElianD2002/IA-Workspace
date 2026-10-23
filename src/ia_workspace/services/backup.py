@@ -257,11 +257,14 @@ class BackupService:
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='brain_proposals'"
             ).fetchone()
             pending_proposals: set[tuple[str, str]] = set()
+            all_db_proposals: set[tuple[str, str]] = set()
             if has_proposals_table:
                 cursor.execute(
                     "SELECT id, project_key FROM brain_proposals WHERE status IN ('pending', 'conflict')"
                 )
                 pending_proposals = {(row[0], row[1]) for row in cursor.fetchall()}
+                cursor.execute("SELECT id, project_key FROM brain_proposals")
+                all_db_proposals = {(row[0], row[1]) for row in cursor.fetchall()}
         finally:
             conn.close()
 
@@ -345,11 +348,26 @@ class BackupService:
                 collected_proposals.add((p_id, p_key))
 
         if has_proposals_table:
-            unrecorded = collected_proposals - pending_proposals
+            unrecorded = collected_proposals - all_db_proposals
             if unrecorded:
                 first_unrecorded = next(iter(unrecorded))
+                prop_id, proj_key = first_unrecorded
+                prop_file = brain_dir / "projects" / proj_key / ".proposals" / f"{prop_id}.md"
+                motivo = "la propuesta no pudo sincronizarse o fue creada concurrentemente"
+                if prop_file.is_file():
+                    try:
+                        text = prop_file.read_text(encoding="utf-8")
+                        from ia_workspace.brain.proposals import parse_proposal, ProposalOperation
+                        fields, _ = parse_proposal(text)
+                        raw_op = (fields.get("operation") or "create").strip().lower()
+                        ProposalOperation(raw_op)
+                        motivo = "la propuesta en disco aún no ha sido sincronizada con la base de datos"
+                    except Exception as err:
+                        motivo = f"el archivo en disco tiene un formato no válido ({err}) y no pudo sincronizarse"
+
                 raise BackupConcurrencyError(
-                    f"Propuesta '{first_unrecorded[0]}' creada en disco pero no registrada en base de datos"
+                    f"Propuesta '{prop_id}' creada en disco pero no registrada en base de datos "
+                    f"(proyecto '{proj_key}'): {motivo}."
                 )
 
         # Ordenar alfabéticamente para asegurar reproducibilidad

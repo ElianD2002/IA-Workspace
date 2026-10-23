@@ -253,7 +253,7 @@ class IAWorkspaceApplication(Adw.Application):
         from ia_workspace.ui.dialogs.preferences import PreferencesDialog
 
         assert self.ctx is not None
-        PreferencesDialog(self.ctx).present(self._window)
+        PreferencesDialog(self.ctx, parent_window=self._window).present(self._window)
 
     def _show_shortcuts(self) -> None:
         from ia_workspace.ui.dialogs.shortcuts import build_shortcuts_dialog

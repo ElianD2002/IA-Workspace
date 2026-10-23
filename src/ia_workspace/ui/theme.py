@@ -86,6 +86,7 @@ def get_catppuccin_css(dark: bool) -> str:
         popover_bg = c["surface0"]
         accent_fg = c["crust"]
         shade_val = "rgba(0, 0, 0, 0.36)"
+        secondary_opacity = "0.70"
     else:
         card_bg = "#ffffff"
         card_border = c["surface0"]
@@ -94,6 +95,7 @@ def get_catppuccin_css(dark: bool) -> str:
         popover_bg = c["mantle"]
         accent_fg = "#ffffff"
         shade_val = "rgba(0, 0, 0, 0.07)"
+        secondary_opacity = "0.78"
 
     return f"""
 /* Catppuccin {"Mocha (Dark)" if dark else "Latte (Light)"} */
@@ -181,6 +183,12 @@ def get_catppuccin_css(dark: bool) -> str:
   --card-fg-color: {c["text"]};
   --terminal-bg-color: {c["base"]};
   --terminal-fg-color: {c["text"]};
+}}
+
+.dim-label,
+label.dim-label,
+.subtitle {{
+  opacity: {secondary_opacity};
 }}
 """
 

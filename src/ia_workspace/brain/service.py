@@ -610,21 +610,39 @@ class BrainService:
                             text = p_file.read_text(encoding="utf-8")
                             fields, body = parse_proposal(text)
                             created_str = fields.get("created_at") or fields.get("created")
-                            created_at = (
-                                datetime.fromisoformat(created_str)
-                                if created_str
-                                else datetime.fromtimestamp(p_file.stat().st_mtime, UTC).replace(microsecond=0)
-                            )
+                            try:
+                                created_at = (
+                                    datetime.fromisoformat(created_str)
+                                    if created_str
+                                    else datetime.fromtimestamp(p_file.stat().st_mtime, UTC).replace(microsecond=0)
+                                )
+                            except ValueError:
+                                created_at = datetime.fromtimestamp(p_file.stat().st_mtime, UTC).replace(microsecond=0)
                             reviewed_str = fields.get("reviewed_at") or fields.get("reviewed")
-                            reviewed_at = datetime.fromisoformat(reviewed_str) if reviewed_str else None
+                            reviewed_at = None
+                            if reviewed_str:
+                                try:
+                                    reviewed_at = datetime.fromisoformat(reviewed_str)
+                                except ValueError:
+                                    reviewed_at = None
                             tags_raw = fields.get("tags", "")
                             tags = tuple(t.strip() for t in tags_raw.split(",") if t.strip())
+
+                            raw_op = (fields.get("operation") or "create").strip().lower()
+                            op = ProposalOperation(raw_op)
+
+                            raw_status = (fields.get("status") or "pending").strip().lower()
+                            try:
+                                status = ProposalStatus(raw_status)
+                            except ValueError:
+                                status = ProposalStatus.PENDING
+
                             meta = ProposalMeta(
                                 id=proposal_id,
                                 project_id=project_id,
                                 project_key=project_key,
                                 agent_kind=fields.get("agent_kind") or fields.get("agent") or "cli",
-                                operation=ProposalOperation(fields.get("operation", "create")),
+                                operation=op,
                                 relpath=fields.get("relpath", ""),
                                 title=fields.get("title", proposal_id),
                                 category=fields.get("category", ""),
@@ -632,7 +650,7 @@ class BrainService:
                                 tags=tags,
                                 summary=fields.get("summary") or summarize(body),
                                 base_hash=fields.get("base_hash", ""),
-                                status=ProposalStatus(fields.get("status", "pending")),
+                                status=status,
                                 created_at=created_at,
                                 reviewed_at=reviewed_at,
                                 review_note=fields.get("review_note", ""),

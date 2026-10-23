@@ -283,3 +283,10 @@ progressbar.error > trough > progress {
   padding: 3px 0;
   opacity: 0.8;
 }
+
+/* ---- Contraste optimizado para texto secundario ---- */
+.dim-label,
+label.dim-label,
+.subtitle {
+  opacity: 0.78;
+}

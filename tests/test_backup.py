@@ -442,6 +442,24 @@ class BackupServiceTests(unittest.TestCase):
 
         db.close()
 
+    def test_unrecorded_invalid_proposal_explains_sync_failure(self) -> None:
+        """Verifica que si una propuesta tiene formato inválido, el error explique el motivo y conserve el archivo."""
+        db, mem_key = self._init_workspace_fixture()
+        service = BackupService(self.paths, db=db)
+
+        bad_prop = self.paths.brain_dir / "projects" / mem_key / ".proposals" / "p-bad12345.md"
+        bad_prop.write_text("---\noperation: invalid_op\n---\nContenido inválido", encoding="utf-8")
+
+        with self.assertRaises(BackupConcurrencyError) as ctx:
+            service.create_backup()
+        msg = str(ctx.exception)
+        self.assertIn("creada en disco pero no registrada", msg)
+        self.assertIn("formato no válido", msg)
+        # Verificar que el archivo original no fue eliminado ni modificado
+        self.assertTrue(bad_prop.is_file())
+        self.assertIn("Contenido inválido", bad_prop.read_text(encoding="utf-8"))
+        db.close()
+
     def test_preserves_original_state_after_backup(self) -> None:
         """Verifica que la base y los archivos originales no sufran cambios ni bloqueos."""
         db, _ = self._init_workspace_fixture()
