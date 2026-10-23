@@ -24,6 +24,14 @@ class AppPaths:
     def database(self) -> Path:
         return self.data_dir / DB_FILENAME
 
+    @property
+    def brain_dir(self) -> Path:
+        return self.data_dir / "brain"
+
+    @property
+    def backups_dir(self) -> Path:
+        return self.data_dir / "backups"
+
 
 def _source_root() -> Path | None:
     root = Path(__file__).resolve().parents[2]
