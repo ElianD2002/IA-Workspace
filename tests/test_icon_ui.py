@@ -95,6 +95,58 @@ class IconInGtkTest(unittest.TestCase):
                 os.environ.pop("IAW_DATA_DIR", None)
         self.assertEqual(errors, [], "\n".join(errors))
 
+    def test_restore_icon_resolves_for_assistant(self) -> None:
+        from ia_workspace import APP_RESTORE_ID
+        from ia_workspace.config import AppPaths
+        from ia_workspace.ui.dialogs.restore_assistant import RestoreAssistantApplication
+
+        errors: list[str] = []
+        with temp_dir() as data:
+            paths = AppPaths(data_dir=Path(data))
+            app = RestoreAssistantApplication(paths=paths)
+            previous_hook = sys.excepthook
+            sys.excepthook = lambda *exc: errors.append("".join(traceback.format_exception(*exc)))
+
+            def scenario() -> bool:
+                try:
+                    Gtk.Settings.get_default().set_property("gtk-enable-animations", False)
+                    win = app.window
+                    pump()
+                    if win is None:
+                        errors.append("la ventana del asistente no fue creada")
+                        app.quit()
+                        return GLib.SOURCE_REMOVE
+
+                    if app.get_application_id() != APP_RESTORE_ID:
+                        errors.append(f"id inesperado: {app.get_application_id()!r}")
+                    if Gtk.Window.get_default_icon_name() != APP_RESTORE_ID:
+                        errors.append(f"icono predeterminado inesperado: {Gtk.Window.get_default_icon_name()!r}")
+
+                    theme = Gtk.IconTheme.get_for_display(win.get_display())
+                    if not theme.has_icon(APP_RESTORE_ID):
+                        errors.append("el tema de iconos no encuentra el icono del asistente")
+
+                    for size in (16, 32, 48, 128, 256):
+                        paintable = theme.lookup_icon(APP_RESTORE_ID, None, size, 1, Gtk.TextDirection.NONE, 0)
+                        file = paintable.get_file()
+                        path = Path(file.get_path()) if file is not None and file.get_path() else None
+                        project_icon = ROOT / "data" / "icons" / "hicolor" / f"{size}x{size}" / "apps" / f"{APP_RESTORE_ID}.png"
+                        if path is None or not path.is_file():
+                            errors.append(f"{size}px: archivo de icono no encontrado: {path}")
+                        elif path.read_bytes() != project_icon.read_bytes():
+                            errors.append(f"{size}px resolvió a {path}, que no coincide con {project_icon}")
+                except Exception:  # noqa: BLE001
+                    errors.append(traceback.format_exc())
+                app.quit()
+                return GLib.SOURCE_REMOVE
+
+            app.connect("activate", lambda *_: GLib.idle_add(scenario))
+            try:
+                app.run([])
+            finally:
+                sys.excepthook = previous_hook
+        self.assertEqual(errors, [], "\n".join(errors))
+
 
 if __name__ == "__main__":
     unittest.main()

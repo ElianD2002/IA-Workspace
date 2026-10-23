@@ -37,9 +37,12 @@ RESTORE_DESKTOP_TARGET="$APPS_DIR/$APP_ID.Restore.desktop"
 MANIFEST_FILE="$LIB_DIR/.install-manifest"
 
 SIZES=(16 24 32 48 64 128 256 512)
+APP_ICONS=("$APP_ID" "$RESTORE_APP_ID")
 
 icon_target() {
-  echo "$ICONS_DIR/${1}x${1}/apps/$APP_ID.png"
+  local size="$1"
+  local id="${2:-$APP_ID}"
+  echo "$ICONS_DIR/${size}x${size}/apps/$id.png"
 }
 
 # Comprueba si IA Workspace o RestoreAssistant están corriendo reteniendo bloqueos exclusivos
@@ -92,11 +95,13 @@ cmd_install() {
   check_running_instances
 
   # Comprobar iconos oficiales
-  for size in "${SIZES[@]}"; do
-    if [[ ! -f "$SOURCE_ICONS/${size}x${size}/apps/$APP_ID.png" ]]; then
-      echo "Error: Falta el icono oficial para ${size}x${size} en $SOURCE_ICONS" >&2
-      exit 1
-    fi
+  for icon_id in "${APP_ICONS[@]}"; do
+    for size in "${SIZES[@]}"; do
+      if [[ ! -f "$SOURCE_ICONS/${size}x${size}/apps/$icon_id.png" ]]; then
+        echo "Error: Falta el icono oficial ($icon_id) para ${size}x${size} en $SOURCE_ICONS" >&2
+        exit 1
+      fi
+    done
   done
 
   if [[ ! -f "$DESKTOP_SRC" || ! -f "$RESTORE_DESKTOP_SRC" ]]; then
@@ -133,8 +138,10 @@ from gi.repository import Gtk, Adw, WebKit, Vte
     "$DESKTOP_TARGET"
     "$RESTORE_DESKTOP_TARGET"
   )
-  for size in "${SIZES[@]}"; do
-    target_files+=("$(icon_target "$size")")
+  for icon_id in "${APP_ICONS[@]}"; do
+    for size in "${SIZES[@]}"; do
+      target_files+=("$(icon_target "$size" "$icon_id")")
+    done
   done
 
   for tf in "${target_files[@]}"; do
@@ -325,12 +332,14 @@ EOF
   echo "$RESTORE_DESKTOP_TARGET" >> "$manifest_tmp"
 
   # 4. Instalar iconos oficiales
-  for size in "${SIZES[@]}"; do
-    local target
-    target="$(icon_target "$size")"
-    mkdir -p "$(dirname "$target")"
-    install -m 0644 "$SOURCE_ICONS/${size}x${size}/apps/$APP_ID.png" "$target"
-    echo "$target" >> "$manifest_tmp"
+  for icon_id in "${APP_ICONS[@]}"; do
+    for size in "${SIZES[@]}"; do
+      local target
+      target="$(icon_target "$size" "$icon_id")"
+      mkdir -p "$(dirname "$target")"
+      install -m 0644 "$SOURCE_ICONS/${size}x${size}/apps/$icon_id.png" "$target"
+      echo "$target" >> "$manifest_tmp"
+    done
   done
   refresh_icon_cache
 
@@ -398,10 +407,13 @@ cmd_status() {
   echo "  Binario Asistente:    $BIN_DIR/iaw-restore-gui ($( [[ -x "$BIN_DIR/iaw-restore-gui" ]] && echo 'instalado' || echo 'no instalado' ))"
 
   local icon_count=0
-  for size in "${SIZES[@]}"; do
-    [[ -f "$(icon_target "$size")" ]] && icon_count=$((icon_count + 1))
+  local total_icons=$(( ${#SIZES[@]} * ${#APP_ICONS[@]} ))
+  for icon_id in "${APP_ICONS[@]}"; do
+    for size in "${SIZES[@]}"; do
+      [[ -f "$(icon_target "$size" "$icon_id")" ]] && icon_count=$((icon_count + 1))
+    done
   done
-  echo "  Iconos hicolor:       $icon_count de ${#SIZES[@]} instalados"
+  echo "  Iconos hicolor:       $icon_count de $total_icons instalados"
   echo "  Datos de usuario XDG: $USER_DATA_DIR ($( [[ -d "$USER_DATA_DIR" ]] && echo 'presente' || echo 'no creado aún' ))"
 }
 

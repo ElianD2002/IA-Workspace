@@ -72,11 +72,14 @@ class LocalInstallerTests(unittest.TestCase):
         self.assertTrue((lib_dir / "ia_workspace" / "__init__.py").is_file())
         self.assertTrue((lib_dir / "ia_workspace" / "ui" / "style.css").is_file())
 
-        # 4. Comprobar iconos oficiales en todas las dimensiones
+        # 4. Comprobar iconos oficiales de ambas aplicaciones en todas las dimensiones
         sizes = [16, 24, 32, 48, 64, 128, 256, 512]
         for s in sizes:
             icon_p = icons_dir / f"{s}x{s}" / "apps" / "io.github.elianmartinez.IAWorkspace.png"
-            self.assertTrue(icon_p.is_file(), f"Falta icono {s}x{s}")
+            restore_icon_p = icons_dir / f"{s}x{s}" / "apps" / "io.github.elianmartinez.IAWorkspace.Restore.png"
+            self.assertTrue(icon_p.is_file(), f"Falta icono principal {s}x{s}")
+            self.assertTrue(restore_icon_p.is_file(), f"Falta icono asistente {s}x{s}")
+            self.assertNotEqual(icon_p.read_bytes(), restore_icon_p.read_bytes(), f"Iconos iguales en {s}x{s}")
 
     def test_installer_is_idempotent(self) -> None:
         """Comprueba que ejecutar la instalación dos veces sucesivas sea limpio y mantenga el estado."""
@@ -88,7 +91,7 @@ class LocalInstallerTests(unittest.TestCase):
 
         res_status = self._run_installer("status")
         self.assertEqual(res_status.returncode, 0)
-        self.assertIn("8 de 8 instalados", res_status.stdout)
+        self.assertIn("16 de 16 instalados", res_status.stdout)
 
     def test_installed_executables_help_and_runtime(self) -> None:
         """Comprueba que los binarios instalados respondan correctamente a invocación."""

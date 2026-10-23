@@ -24,45 +24,57 @@ import gi  # noqa: E402
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import GdkPixbuf  # noqa: E402
 
-from ia_workspace import APP_ID  # noqa: E402
+from ia_workspace import APP_ID, APP_RESTORE_ID  # noqa: E402
 
-SOURCE = ROOT / "data" / "icons" / "app-icon.png"
 THEME_DIR = ROOT / "data" / "icons" / "hicolor"
 SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 
+ICON_DEFINITIONS = (
+    ("app-icon.png", APP_ID),
+    ("app-icon-restore.png", APP_RESTORE_ID),
+)
 
-def target(size: int) -> Path:
-    return THEME_DIR / f"{size}x{size}" / "apps" / f"{APP_ID}.png"
+
+def target(size: int, icon_id: str = APP_ID) -> Path:
+    return THEME_DIR / f"{size}x{size}" / "apps" / f"{icon_id}.png"
 
 
-def render(size: int) -> bytes:
-    source = GdkPixbuf.Pixbuf.new_from_file(str(SOURCE))
+def render(size: int, source_path: Path) -> bytes:
+    source = GdkPixbuf.Pixbuf.new_from_file(str(source_path))
     scaled = source.scale_simple(size, size, GdkPixbuf.InterpType.HYPER)
     ok, data = scaled.save_to_bufferv("png", [], [])
     if not ok:
-        raise RuntimeError(f"no se pudo codificar el icono de {size}px")
+        raise RuntimeError(f"no se pudo codificar el icono de {size}px desde {source_path.name}")
     return bytes(data)
 
 
 def main(argv: list[str]) -> int:
     check_only = "--check" in argv
-    before = hashlib.sha256(SOURCE.read_bytes()).hexdigest()
     stale = []
-    for size in SIZES:
-        data = render(size)
-        path = target(size)
-        if path.is_file() and path.read_bytes() == data:
-            continue
-        stale.append(path)
-        if not check_only:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-    if hashlib.sha256(SOURCE.read_bytes()).hexdigest() != before:
-        raise RuntimeError("el icono original cambió durante la generación")
+
+    for filename, icon_id in ICON_DEFINITIONS:
+        source_path = ROOT / "data" / "icons" / filename
+        if not source_path.is_file():
+            raise RuntimeError(f"falta el icono de origen: {source_path}")
+        before = hashlib.sha256(source_path.read_bytes()).hexdigest()
+
+        for size in SIZES:
+            data = render(size, source_path)
+            path = target(size, icon_id)
+            if path.is_file() and path.read_bytes() == data:
+                continue
+            stale.append(path)
+            if not check_only:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+
+        if hashlib.sha256(source_path.read_bytes()).hexdigest() != before:
+            raise RuntimeError(f"el icono original {filename} cambió durante la generación")
+
     if check_only and stale:
         print("Iconos desactualizados (ejecuta scripts/build_icons.py):", *map(str, stale), sep="\n  ")
         return 1
-    print("Iconos al día." if not stale else f"Generados {len(stale)} tamaños en {THEME_DIR.relative_to(ROOT)}")
+    print("Iconos al día." if not stale else f"Generados {len(stale)} iconos en {THEME_DIR.relative_to(ROOT)}")
     return 0
 
 

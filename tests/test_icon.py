@@ -22,10 +22,12 @@ import gi
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import GdkPixbuf  # noqa: E402
 
-from ia_workspace import APP_ID, APP_NAME  # noqa: E402
+from ia_workspace import APP_ID, APP_NAME, APP_RESTORE_ID  # noqa: E402
 
 SOURCE = ROOT / "data" / "icons" / "app-icon.png"
+RESTORE_SOURCE = ROOT / "data" / "icons" / "app-icon-restore.png"
 DESKTOP = ROOT / "data" / f"{APP_ID}.desktop"
+RESTORE_DESKTOP = ROOT / "data" / f"{APP_RESTORE_ID}.desktop"
 LAUNCHER = ROOT / "scripts" / "desktop-launcher.sh"
 SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 
@@ -50,26 +52,35 @@ class IconAssetTests(unittest.TestCase):
         self.assertEqual((pixbuf.get_width(), pixbuf.get_height()), (1254, 1254))
         self.assertTrue(pixbuf.get_has_alpha())
 
+    def test_restore_original_is_the_approved_png(self) -> None:
+        pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(RESTORE_SOURCE))
+        self.assertEqual((pixbuf.get_width(), pixbuf.get_height()), (1254, 1254))
+        self.assertTrue(pixbuf.get_has_alpha())
+
     def test_generated_sizes_are_up_to_date_and_faithful(self) -> None:
         builder = load_builder()
         self.assertEqual(builder.SIZES, SIZES)
-        for size in SIZES:
-            path = builder.target(size)
-            self.assertEqual(path.name, f"{APP_ID}.png")
-            self.assertEqual(path.read_bytes(), builder.render(size), f"{size}px desactualizado")
-            pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(path))
-            self.assertEqual((pixbuf.get_width(), pixbuf.get_height()), (size, size))
-            self.assertTrue(pixbuf.get_has_alpha(), f"{size}px perdió la transparencia")
-            pixels, stride, channels = pixbuf.get_pixels(), pixbuf.get_rowstride(), pixbuf.get_n_channels()
-            corner_alpha = pixels[3]
-            center_alpha = pixels[(size // 2) * stride + (size // 2) * channels + 3]
-            self.assertLess(corner_alpha, 32, f"{size}px: la esquina debería ser transparente")
-            self.assertGreater(center_alpha, 200, f"{size}px: el centro debería ser opaco")
+        for filename, icon_id in [("app-icon.png", APP_ID), ("app-icon-restore.png", APP_RESTORE_ID)]:
+            src_p = ROOT / "data" / "icons" / filename
+            for size in SIZES:
+                path = builder.target(size, icon_id)
+                self.assertEqual(path.name, f"{icon_id}.png")
+                self.assertEqual(path.read_bytes(), builder.render(size, src_p), f"{size}px ({icon_id}) desactualizado")
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(path))
+                self.assertEqual((pixbuf.get_width(), pixbuf.get_height()), (size, size))
+                self.assertTrue(pixbuf.get_has_alpha(), f"{size}px ({icon_id}) perdió la transparencia")
+                pixels, stride, channels = pixbuf.get_pixels(), pixbuf.get_rowstride(), pixbuf.get_n_channels()
+                corner_alpha = pixels[3]
+                center_alpha = pixels[(size // 2) * stride + (size // 2) * channels + 3]
+                self.assertLess(corner_alpha, 32, f"{size}px ({icon_id}): la esquina debería ser transparente")
+                self.assertGreater(center_alpha, 200, f"{size}px ({icon_id}): el centro debería ser opaco")
 
     def test_building_never_modifies_the_original(self) -> None:
         before = hashlib.sha256(SOURCE.read_bytes()).hexdigest()
+        before_restore = hashlib.sha256(RESTORE_SOURCE.read_bytes()).hexdigest()
         self.assertEqual(load_builder().main(["--check"]), 0)
         self.assertEqual(hashlib.sha256(SOURCE.read_bytes()).hexdigest(), before)
+        self.assertEqual(hashlib.sha256(RESTORE_SOURCE.read_bytes()).hexdigest(), before_restore)
 
 
 class DesktopEntryTests(unittest.TestCase):
@@ -81,10 +92,20 @@ class DesktopEntryTests(unittest.TestCase):
         self.assertEqual(entry["StartupWMClass"], APP_ID)
         self.assertEqual(entry["Type"], "Application")
 
+        restore_entry = read_desktop(RESTORE_DESKTOP)
+        self.assertEqual(RESTORE_DESKTOP.stem, APP_RESTORE_ID)
+        self.assertEqual(restore_entry["Name"], "IA Workspace — Recuperación")
+        self.assertEqual(restore_entry["Icon"], APP_RESTORE_ID)
+        self.assertEqual(restore_entry["StartupWMClass"], APP_RESTORE_ID)
+        self.assertEqual(restore_entry["Type"], "Application")
+        # Ambos lanzadores deben tener iconos distintos
+        self.assertNotEqual(entry["Icon"], restore_entry["Icon"])
+
     @unittest.skipUnless(shutil.which("desktop-file-validate"), "desktop-file-validate no disponible")
     def test_validates(self) -> None:
-        result = subprocess.run(["desktop-file-validate", str(DESKTOP)], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for desk_file in [DESKTOP, RESTORE_DESKTOP]:
+            result = subprocess.run(["desktop-file-validate", str(desk_file)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class LauncherInstallTests(unittest.TestCase):

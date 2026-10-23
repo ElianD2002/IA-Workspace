@@ -33,10 +33,10 @@ from ia_workspace.services.restore import (
     RestoreService,
     RestoreValidationError,
 )
+from ia_workspace import APP_RESTORE_ID
 from ia_workspace.ui import theme
 import ia_workspace.ui.widgets as w
 
-APP_RESTORE_ID = "io.github.elianmartinez.IAWorkspace.RestoreAssistant"
 TZ_TEGUCIGALPA = ZoneInfo("America/Tegucigalpa")
 
 
@@ -530,6 +530,17 @@ class RestoreAssistantApplication(Adw.Application):
         self.paths = paths
         self.initial_backup = initial_backup
         self.window: RestoreAssistantWindow | None = None
+
+    def do_startup(self) -> None:
+        Adw.Application.do_startup(self)
+        self._setup_icon()
+
+    def _setup_icon(self) -> None:
+        display = Gdk.Display.get_default()
+        source_icons = Path(__file__).resolve().parents[3] / "data" / "icons"
+        if display is not None and (source_icons / "hicolor").is_dir():
+            Gtk.IconTheme.get_for_display(display).add_search_path(str(source_icons))
+        Gtk.Window.set_default_icon_name(APP_RESTORE_ID)
 
     def do_activate(self) -> None:
         theme.setup_theme()
