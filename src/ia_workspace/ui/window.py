@@ -7,7 +7,7 @@ es visible a la vez; las demás —y sus sesiones— siguen existiendo en segund
 
 from __future__ import annotations
 
-from gi.repository import Adw, Gio, GLib, GObject, Gtk
+from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk
 
 from ia_workspace import APP_NAME
 from ia_workspace.context import AppContext
@@ -67,6 +67,8 @@ class MainWindow(Adw.ApplicationWindow):
         self.add_breakpoint(breakpoint)
 
         self._setup_actions()
+        self._periodic_ticks = 0
+        self._minimized = False
         ctx.projects.subscribe(self._on_projects_changed)
         ctx.sessions.subscribe(self._on_session_event)
         self.connect("close-request", self._on_close_request)
@@ -79,6 +81,8 @@ class MainWindow(Adw.ApplicationWindow):
     def navigate(self, screen: str) -> None:
         if screen not in self._pages:
             return
+        if self._screen == "workspace":
+            self.save_state()
         self._screen = screen
         self.ctx.workspace.activate(None)
         page = self._pages[screen]
@@ -92,6 +96,8 @@ class MainWindow(Adw.ApplicationWindow):
         if project is None:
             self.toast("El proyecto ya no está registrado.")
             return
+        if self._screen == "workspace":
+            self.save_state()
         view = self._workspaces.get(project_id)
         if view is None:
             view = WorkspaceView(self, project)
@@ -223,21 +229,52 @@ class MainWindow(Adw.ApplicationWindow):
             if view._browser is not None:
                 view._browser.shutdown()
 
+    def minimize(self) -> None:
+        self._minimized = True
+        super().minimize()
+
+    def unminimize(self) -> None:
+        self._minimized = False
+        super().unminimize()
+
+    def present(self) -> None:
+        self._minimized = False
+        super().present()
+
+    def is_minimized(self) -> bool:
+        if self._minimized:
+            return True
+        surface = self.get_surface()
+        if isinstance(surface, Gdk.Toplevel):
+            state = surface.get_state()
+            return bool(state & (Gdk.ToplevelState.MINIMIZED | Gdk.ToplevelState.SUSPENDED))
+        return False
+
     def save_state(self) -> None:
         width, height = self.get_default_size()
         if not self.is_maximized() and width > 0 and height > 0:
             self.ctx.settings.set(_SIZE_KEY, f"{width}x{height}")
         for view in self._workspaces.values():
             view.save_state()
-        self.ctx.workspace.flush()
+        if self.ctx.workspace.has_dirty:
+            self.ctx.workspace.flush()
 
     def _periodic_flush(self) -> bool:
         if self.ctx.sessions.is_shutting_down:
             return GLib.SOURCE_REMOVE  # do_shutdown hará el guardado final
-        for view in self._workspaces.values():
-            view.save_state()
-            view._render_memory_hint()
-        self.ctx.workspace.flush()
+
+        self._periodic_ticks += 1
+
+        if not self.is_minimized() and self._screen == "workspace":
+            active_id = self.ctx.workspace.active_project_id
+            if active_id is not None and active_id in self._workspaces:
+                active_view = self._workspaces[active_id]
+                active_view.save_state()
+                if self._periodic_ticks % 6 == 0:
+                    active_view._render_memory_hint()
+
+        if self.ctx.workspace.has_dirty:
+            self.ctx.workspace.flush()
         return GLib.SOURCE_CONTINUE
 
     def _on_close_request(self, _window: Gtk.Window) -> bool:

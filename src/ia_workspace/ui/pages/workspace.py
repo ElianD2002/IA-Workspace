@@ -94,6 +94,8 @@ class WorkspaceView(Page):
         self._proposals_button.connect("clicked", lambda _b: self._open_proposals())
         self.header.pack_start(self._proposals_button)
         self._proposals_monitor = None
+        self._last_memory_text: str | None = None
+        self._last_pending_proposals: int | None = None
 
         # Con la ventana estrecha el panel ChatGPT se oculta: este botón abre su vista ampliada.
         self._chat_header_button = Gtk.Button(icon_name="user-available-symbolic", visible=False,
@@ -751,8 +753,10 @@ class WorkspaceView(Page):
     def _on_agent_selected(self, *_args: object) -> None:
         index = self._agent_picker.get_selected()
         if 0 <= index < len(self._agent_kinds):
-            self.state.extra["agent"] = self._agent_kinds[index].value
-            self._changed()
+            val = self._agent_kinds[index].value
+            if self.state.extra.get("agent") != val:
+                self.state.extra["agent"] = val
+                self._changed()
 
     def _selected_agent(self) -> AgentKind | None:
         index = self._agent_picker.get_selected()
@@ -1449,23 +1453,27 @@ class WorkspaceView(Page):
         else:
             text = ("Este proyecto aún no tiene documentos en el Cerebro compartido: estado actual, "
                     "arquitectura, decisiones, reglas… Cada proyecto tiene su propia memoria.")
-        self._memory_hint.set_label(text)
+        if text != getattr(self, "_last_memory_text", None):
+            self._memory_hint.set_label(text)
+            self._last_memory_text = text
 
         self._setup_proposals_monitor()
         pending = brain.count_pending_proposals(self.project.id) if brain is not None else 0
-        if hasattr(self, "_proposals_button"):
-            self._proposals_button.set_visible(pending > 0)
-            if pending > 0:
-                self._proposals_label.set_label(str(pending))
-                self._proposals_button.set_tooltip_text(
-                    f"{pending} propuesta{'s' if pending != 1 else ''} pendiente{'s' if pending != 1 else ''} de revisión en el Cerebro · Clic para revisar"
-                )
-        if hasattr(self, "_proposals_link"):
-            self._proposals_link.set_visible(pending > 0)
-            if pending > 0:
-                self._proposals_link.set_label(
-                    f"Revisar {pending} propuesta{'s' if pending != 1 else ''} pendiente{'s' if pending != 1 else ''}…"
-                )
+        if pending != getattr(self, "_last_pending_proposals", None):
+            self._last_pending_proposals = pending
+            if hasattr(self, "_proposals_button"):
+                self._proposals_button.set_visible(pending > 0)
+                if pending > 0:
+                    self._proposals_label.set_label(str(pending))
+                    self._proposals_button.set_tooltip_text(
+                        f"{pending} propuesta{'s' if pending != 1 else ''} pendiente{'s' if pending != 1 else ''} de revisión en el Cerebro · Clic para revisar"
+                    )
+            if hasattr(self, "_proposals_link"):
+                self._proposals_link.set_visible(pending > 0)
+                if pending > 0:
+                    self._proposals_link.set_label(
+                        f"Revisar {pending} propuesta{'s' if pending != 1 else ''} pendiente{'s' if pending != 1 else ''}…"
+                    )
 
     def _on_transfers_changed(self, project_id: int) -> None:
         if project_id == self.project.id:  # nunca se mezclan tareas entre proyectos
@@ -1579,6 +1587,8 @@ class WorkspaceView(Page):
             self._context_files.append(w.info_row("No hay AGENTS.md, CLAUDE.md ni GEMINI.md en la carpeta."))
         self._render_sessions()
         self._render_tasks()
+        if self.ctx.brain is not None:
+            self.ctx.brain.sync_proposals(self.project)
         self._render_memory_hint()
 
     # ---- estado ---------------------------------------------------------------------

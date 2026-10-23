@@ -315,6 +315,167 @@ class MultiprojectSessionsUITest(unittest.TestCase):
 
         return errors
 
+    def test_periodic_optimization_persistence_and_external_proposals(self) -> None:
+        with temp_dir() as data, temp_dir() as folders:
+            dir_a = Path(folders) / "proyecto-alfa"
+            dir_b = Path(folders) / "proyecto-beta"
+            dir_a.mkdir()
+            dir_b.mkdir()
+            (dir_a / "AGENTS.md").write_text("reglas alfa")
+            (dir_b / "CLAUDE.md").write_text("reglas beta")
+
+            os.environ["IAW_DATA_DIR"] = data
+            os.environ["IAW_SIMULATED_AGENTS"] = "1"
+            try:
+                errors = self._run_optimization_scenario(dir_a, dir_b)
+            finally:
+                os.environ.pop("IAW_DATA_DIR", None)
+                os.environ.pop("IAW_SIMULATED_AGENTS", None)
+
+            self.assertEqual(errors, [])
+
+    def _run_optimization_scenario(self, dir_a: Path, dir_b: Path) -> list[str]:
+        from ia_workspace.app import IAWorkspaceApplication
+        from ia_workspace.brain.proposals import ProposalOperation
+        from ia_workspace.domain.models import AgentKind
+        from ia_workspace.persistence.repositories import WorkspaceStateRepository
+
+        errors: list[str] = []
+        app = IAWorkspaceApplication()
+        app.set_flags(Gio.ApplicationFlags.NON_UNIQUE)
+        previous_hook = sys.excepthook
+
+        def hook(exc_type, exc, tb):
+            errors.append("".join(traceback.format_exception(exc_type, exc, tb)))
+
+        sys.excepthook = hook
+
+        def check(condition: bool, message: str) -> None:
+            if not condition:
+                errors.append(message)
+
+        def scenario() -> bool:
+            try:
+                Gtk.Settings.get_default().set_property("gtk-enable-animations", False)
+                win = app._window
+                ctx = app.ctx
+                pump(seconds=0.05)
+
+                p_a = ctx.projects.register("Proyecto Alfa", str(dir_a), (AgentKind.CLAUDE_CODE,))
+                p_b = ctx.projects.register("Proyecto Beta", str(dir_b), (AgentKind.ANTIGRAVITY,))
+
+                repo = WorkspaceStateRepository(ctx.db)
+
+                # 1. Abrir Alfa y escribir un borrador
+                win.open_project(p_a.id)
+                pump(seconds=0.1)
+                view_a = win._workspaces[p_a.id]
+                buf_a = view_a._prompt.get_buffer()
+                buf_a.set_text("Borrador persistente de Alfa")
+                pump(seconds=0.05)
+                check(ctx.workspace.has_dirty, "Alfa no se marcó como dirty al escribir borrador")
+
+                # 2. Cambiar de proyecto persiste de inmediato sin esperar al temporizador
+                win.open_project(p_b.id)
+                pump(seconds=0.1)
+                view_b = win._workspaces[p_b.id]
+                check(p_a.id not in ctx.workspace._dirty, "El cambio de proyecto no limpió el dirty de Alfa")
+                loaded_a = repo.load(p_a.id)
+                check(loaded_a.prompt_draft == "Borrador persistente de Alfa", "El borrador de Alfa no se persistió en SQLite al cambiar a Beta")
+
+                # 3. Aislamiento de borrador
+                buf_b = view_b._prompt.get_buffer()
+                text_b = buf_b.get_text(buf_b.get_start_iter(), buf_b.get_end_iter(), False)
+                check(text_b == "", f"El borrador de Beta debió iniciar vacío pero tiene: {text_b!r}")
+                buf_b.set_text("Borrador de Beta")
+                pump(seconds=0.05)
+                loaded_a_after = repo.load(p_a.id)
+                check(loaded_a_after.prompt_draft == "Borrador persistente de Alfa", "Escribir en Beta mutó el borrador de Alfa en disco")
+
+                # 4. Navegar a 'home' persiste Beta de inmediato
+                win.navigate("home")
+                pump(seconds=0.05)
+                loaded_b = repo.load(p_b.id)
+                check(loaded_b.prompt_draft == "Borrador de Beta", "Navegar a home no persistió el borrador de Beta")
+
+                # Volver a Beta
+                win.open_project(p_b.id)
+                pump(seconds=0.1)
+
+                # 5. Optimización periódica: reposo y minimización no generan escrituras ni consultas
+                win.save_state()
+                pump(seconds=0.05)
+
+                queries: list[str] = []
+                ctx.db.conn.set_trace_callback(queries.append)
+
+                win._periodic_flush()
+                check(len(queries) == 0, f"_periodic_flush en reposo generó consultas inesperadas: {queries}")
+
+                # Minimizar la ventana
+                win.minimize()
+                pump(seconds=0.1)
+                check(win.is_minimized() is True, "is_minimized() no reporta True tras minimize()")
+
+                queries.clear()
+                # Forzar un tick múltiplo de 6 mientras está minimizada
+                win._periodic_ticks = 5  # el siguiente será 6
+                win._periodic_flush()
+                check(len(queries) == 0, f"_periodic_flush minimizado no debió consultar SQLite pero ejecutó: {queries}")
+
+                win.unminimize()
+                pump(seconds=0.1)
+                check(win.is_minimized() is False, "is_minimized() no reporta False tras unminimize()")
+
+                ctx.db.conn.set_trace_callback(None)
+
+                # 6. Actualización de propuestas externas en proyecto oculto
+                check(win.ctx.workspace.active_project_id == p_b.id, "Beta no es el proyecto activo")
+                prop_meta = ctx.brain.propose(
+                    project=p_a,
+                    operation=ProposalOperation.CREATE,
+                    relpath="arquitectura/sistema.md",
+                    title="Nueva Propuesta Externa para Alfa",
+                    category_key="arquitectura",
+                    body="# Arquitectura\nDetalles del sistema.",
+                    agent_kind="claude_code",
+                )
+                check(prop_meta is not None, "no se pudo crear la propuesta de prueba")
+
+                # Al volver a abrir Alfa, view_a.refresh() detecta la propuesta y actualiza la UI
+                win.open_project(p_a.id)
+                pump(seconds=0.1)
+                check(view_a._proposals_button.get_visible() is True, "El botón de propuestas de Alfa no se hizo visible")
+                check(view_a._proposals_label.get_label() == "1", f"Label de propuestas es {view_a._proposals_label.get_label()!r}, esperado '1'")
+
+                # 7. Cierre seguro sin pérdida de datos
+                buf_a.set_text("Borrador final antes de cerrar")
+                win._on_close_request(win)
+                final_loaded = repo.load(p_a.id)
+                check(final_loaded.prompt_draft == "Borrador final antes de cerrar", "El cierre no persistió el último borrador")
+
+                app.quit()
+            except Exception:  # noqa: BLE001
+                errors.append(traceback.format_exc())
+                app.quit()
+            return GLib.SOURCE_REMOVE
+
+        def timeout() -> bool:
+            errors.append("tiempo límite de prueba agotado (timeout)")
+            app.quit()
+            return GLib.SOURCE_REMOVE
+
+        app.connect("activate", lambda *_: GLib.idle_add(scenario))
+        watchdog = GLib.timeout_add_seconds(20, timeout)
+        try:
+            app.run([])
+        finally:
+            if "tiempo límite de prueba agotado (timeout)" not in errors:
+                GLib.source_remove(watchdog)
+            sys.excepthook = previous_hook
+
+        return errors
+
 
 if __name__ == "__main__":
     unittest.main()

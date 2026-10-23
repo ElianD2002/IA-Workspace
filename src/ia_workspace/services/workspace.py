@@ -58,10 +58,16 @@ class WorkspaceController:
             self._states[project_id] = self._states_repo.load(project_id)
         return self._states[project_id]
 
+    @property
+    def has_dirty(self) -> bool:
+        return bool(self._dirty)
+
     def mark_dirty(self, project_id: int) -> None:
         self._dirty.add(project_id)
 
     def flush(self) -> None:
+        if not self._dirty:
+            return
         for project_id in sorted(self._dirty):
             if project_id in self._states:
                 self._states_repo.save(project_id, self._states[project_id])
