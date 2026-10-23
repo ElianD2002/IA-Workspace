@@ -214,6 +214,11 @@ def main() -> None:
                     pump(0.5)
                 capture(win, f"{scheme}-05j-biblioteca-prompts")
 
+            # Captura de la pantalla «Historial y revisión»
+            win.navigate("history")
+            pump(0.8)
+            capture(win, f"{scheme}-05m-historial")
+
             win.open_project(ids[0])
             pump(0.8)
             view = win._workspaces[ids[0]]

@@ -338,3 +338,51 @@ class WorkspaceState:
         if isinstance(data.get("extra"), dict):
             state.extra = dict(data["extra"])  # type: ignore[arg-type]
         return state
+
+
+class HistoryEventKind(StrEnum):
+    """Categoría del evento histórico (fase 6C.1)."""
+
+    TASK = "task"
+    PROMPT_TRANSFER = "prompt_transfer"
+    BRAIN_PROPOSAL = "brain_proposal"
+    CHAT_LINK = "chat_link"
+
+    @property
+    def label(self) -> str:
+        _LABELS = {
+            HistoryEventKind.TASK: "Tareas",
+            HistoryEventKind.PROMPT_TRANSFER: "Transferencias de prompts",
+            HistoryEventKind.BRAIN_PROPOSAL: "Cerebro y memoria",
+            HistoryEventKind.CHAT_LINK: "Conversaciones ChatGPT",
+        }
+        return _LABELS[self]
+
+    @property
+    def icon_name(self) -> str:
+        _ICONS = {
+            HistoryEventKind.TASK: "view-list-bullet-symbolic",
+            HistoryEventKind.PROMPT_TRANSFER: "document-send-symbolic",
+            HistoryEventKind.BRAIN_PROPOSAL: "user-bookmarks-symbolic",
+            HistoryEventKind.CHAT_LINK: "web-browser-symbolic",
+        }
+        return _ICONS[self]
+
+
+@dataclass(frozen=True)
+class HistoryEvent:
+    """Evento registrado en el historial de actividad de IA Workspace."""
+
+    id: str
+    kind: HistoryEventKind
+    project_id: int
+    project_name: str
+    title: str
+    description: str
+    created_at: datetime
+    agent_kind: str | None = None
+    status: str | None = None
+    status_label: str = ""
+    status_style: str = "dim-label"
+    target_type: str = ""  # "workspace", "tasks", "memory"
+    target_id: str | int | None = None

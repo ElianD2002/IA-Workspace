@@ -11,6 +11,8 @@ from ia_workspace.domain.models import (
     AutonomyMode,
     ChatLink,
     FolderIdentity,
+    HistoryEvent,
+    HistoryEventKind,
     NewProject,
     Project,
     PromptTemplate,
@@ -746,3 +748,311 @@ class PromptTemplateRepository:
                 "SELECT DISTINCT category FROM prompt_templates ORDER BY category ASC"
             ).fetchall()
         return [str(r[0]) for r in rows if r[0]]
+
+
+def _parse_dt_safe(val: str | None) -> datetime:
+    if not val:
+        return datetime.now(UTC)
+    try:
+        dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt
+    except ValueError:
+        return datetime.now(UTC)
+
+
+_PROPOSAL_STATUS_INFO = {
+    "pending": ("Pendiente", "wait"),
+    "approved": ("Aprobada", "success"),
+    "rejected": ("Rechazada", "dim-label"),
+    "conflict": ("En conflicto", "error"),
+}
+
+_PROPOSAL_OP_LABELS = {
+    "create": "Nuevo documento",
+    "update": "Actualización",
+}
+
+_TASK_STATUS_LABELS = {
+    "pending": ("Pendiente", "idle"),
+    "in_progress": ("En progreso", "working"),
+    "pending_review": ("Pendiente de revisión", "wait"),
+    "completed": ("Completada", "done"),
+    "failed": ("Fallida", "error"),
+    "canceled": ("Cancelada", "off"),
+}
+
+_TRANSFER_STATUS_LABELS = {
+    "sent": ("Enviado", "done"),
+    "copied": ("Copiado", "wait"),
+    "error": ("Error", "error"),
+}
+
+
+class HistoryRepository:
+    """Consultas del historial unificado de actividad (fase 6C.1)."""
+
+    def __init__(self, db: Database) -> None:
+        self._conn = db.conn
+
+    def _get_prompt_transfers(self, project_id: int | None) -> list[HistoryEvent]:
+        query = """
+            SELECT pt.id, pt.project_id, p.name AS project_name, pt.agent, pt.prompt, pt.status, pt.detail, pt.created_at
+            FROM prompt_transfers pt
+            JOIN projects p ON pt.project_id = p.id
+        """
+        params: list[object] = []
+        if project_id is not None:
+            query += " WHERE pt.project_id = ?"
+            params.append(project_id)
+        query += " ORDER BY pt.id DESC LIMIT 300"
+        rows = self._conn.execute(query, params).fetchall()
+
+        events: list[HistoryEvent] = []
+        for r in rows:
+            agent_raw = r["agent"]
+            agent_lbl = AgentKind(agent_raw).label if agent_raw in AgentKind._value2member_map_ else agent_raw
+            first_line = r["prompt"].strip().split("\n")[0][:120]
+            st_raw = r["status"]
+            st_lbl, st_stl = _TRANSFER_STATUS_LABELS.get(st_raw, (st_raw, "dim-label"))
+            events.append(
+                HistoryEvent(
+                    id=f"pt:{r['id']}",
+                    kind=HistoryEventKind.PROMPT_TRANSFER,
+                    project_id=r["project_id"],
+                    project_name=r["project_name"],
+                    title=f"Transferencia de prompt ({agent_lbl})",
+                    description=first_line,
+                    created_at=_parse_dt_safe(r["created_at"]),
+                    agent_kind=agent_raw,
+                    status=st_raw,
+                    status_label=st_lbl,
+                    status_style=st_stl,
+                    target_type="workspace",
+                    target_id=r["project_id"],
+                )
+            )
+        return events
+
+    def _get_tasks(self, project_id: int | None) -> list[HistoryEvent]:
+        query = """
+            SELECT t.id, t.project_id, p.name AS project_name, t.title, t.agent, t.created_at
+            FROM tasks t
+            JOIN projects p ON t.project_id = p.id
+        """
+        params: list[object] = []
+        if project_id is not None:
+            query += " WHERE t.project_id = ?"
+            params.append(project_id)
+        query += " ORDER BY t.id DESC LIMIT 300"
+        rows = self._conn.execute(query, params).fetchall()
+
+        events: list[HistoryEvent] = []
+        for r in rows:
+            agent_raw = r["agent"]
+            agent_lbl = AgentKind(agent_raw).label if agent_raw in AgentKind._value2member_map_ else agent_raw
+            desc = f"Tarea para {agent_lbl}"
+            events.append(
+                HistoryEvent(
+                    id=f"task:{r['id']}",
+                    kind=HistoryEventKind.TASK,
+                    project_id=r["project_id"],
+                    project_name=r["project_name"],
+                    title=f"Tarea creada: {r['title']}",
+                    description=desc,
+                    created_at=_parse_dt_safe(r["created_at"]),
+                    agent_kind=agent_raw,
+                    status="created",
+                    status_label="Creada",
+                    status_style="idle",
+                    target_type="tasks",
+                    target_id=r["id"],
+                )
+            )
+        return events
+
+    def _get_task_history(self, project_id: int | None) -> list[HistoryEvent]:
+        query = """
+            SELECT th.id, th.task_id, t.project_id, p.name AS project_name, t.title, t.agent, th.from_status, th.to_status, th.note, th.created_at
+            FROM task_history th
+            JOIN tasks t ON th.task_id = t.id
+            JOIN projects p ON t.project_id = p.id
+            WHERE th.from_status IS NOT NULL AND th.from_status != ''
+        """
+        params: list[object] = []
+        if project_id is not None:
+            query += " AND t.project_id = ?"
+            params.append(project_id)
+        query += " ORDER BY th.id DESC LIMIT 300"
+        rows = self._conn.execute(query, params).fetchall()
+
+        events: list[HistoryEvent] = []
+        for r in rows:
+            agent_raw = r["agent"]
+            from_s = r["from_status"]
+            to_s = r["to_status"]
+            from_lbl = _TASK_STATUS_LABELS.get(from_s, (from_s, "dim-label"))[0]
+            to_lbl, to_stl = _TASK_STATUS_LABELS.get(to_s, (to_s, "dim-label"))
+            desc = f"{from_lbl} → {to_lbl}"
+            if r["note"]:
+                desc += f" · {r['note'].strip()[:100]}"
+            events.append(
+                HistoryEvent(
+                    id=f"th:{r['id']}",
+                    kind=HistoryEventKind.TASK,
+                    project_id=r["project_id"],
+                    project_name=r["project_name"],
+                    title=f"Actualización de tarea: {r['title']}",
+                    description=desc,
+                    created_at=_parse_dt_safe(r["created_at"]),
+                    agent_kind=agent_raw,
+                    status=to_s,
+                    status_label=to_lbl,
+                    status_style=to_stl,
+                    target_type="tasks",
+                    target_id=r["task_id"],
+                )
+            )
+        return events
+
+    def _get_brain_proposals(self, project_id: int | None) -> list[HistoryEvent]:
+        query = """
+            SELECT bp.id, bp.project_id, p.name AS project_name, bp.agent_kind, bp.operation, bp.relpath, bp.title, bp.category, bp.status, bp.created_at, bp.reviewed_at, bp.review_note
+            FROM brain_proposals bp
+            JOIN projects p ON bp.project_id = p.id
+        """
+        params: list[object] = []
+        if project_id is not None:
+            query += " WHERE bp.project_id = ?"
+            params.append(project_id)
+        query += " ORDER BY bp.created_at DESC LIMIT 300"
+        rows = self._conn.execute(query, params).fetchall()
+
+        events: list[HistoryEvent] = []
+        for r in rows:
+            st_raw = r["status"]
+            st_lbl, st_stl = _PROPOSAL_STATUS_INFO.get(st_raw, (st_raw, "dim-label"))
+            op_lbl = _PROPOSAL_OP_LABELS.get(r["operation"], r["operation"])
+            agent_raw = r["agent_kind"] or "agent"
+
+            # Evento de creación
+            events.append(
+                HistoryEvent(
+                    id=f"bp_create:{r['id']}",
+                    kind=HistoryEventKind.BRAIN_PROPOSAL,
+                    project_id=r["project_id"],
+                    project_name=r["project_name"],
+                    title=f"Propuesta de memoria: {r['title']}",
+                    description=f"{op_lbl} en {r['relpath']} ({r['category']})",
+                    created_at=_parse_dt_safe(r["created_at"]),
+                    agent_kind=agent_raw,
+                    status="pending",
+                    status_label="Propuesta",
+                    status_style="wait",
+                    target_type="memory",
+                    target_id=r["id"],
+                )
+            )
+
+            # Evento de revisión si ya fue resuelta
+            if r["reviewed_at"]:
+                rev_desc = f"Revisión de {r['relpath']}"
+                if r["review_note"]:
+                    rev_desc += f" · Nota: {r['review_note'].strip()[:100]}"
+                events.append(
+                    HistoryEvent(
+                        id=f"bp_rev:{r['id']}",
+                        kind=HistoryEventKind.BRAIN_PROPOSAL,
+                        project_id=r["project_id"],
+                        project_name=r["project_name"],
+                        title=f"Propuesta {st_lbl.lower()}: {r['title']}",
+                        description=rev_desc,
+                        created_at=_parse_dt_safe(r["reviewed_at"]),
+                        agent_kind=agent_raw,
+                        status=st_raw,
+                        status_label=st_lbl,
+                        status_style=st_stl,
+                        target_type="memory",
+                        target_id=r["id"],
+                    )
+                )
+        return events
+
+    def _get_chat_links(self, project_id: int | None) -> list[HistoryEvent]:
+        query = """
+            SELECT cl.id, cl.project_id, p.name AS project_name, cl.url, cl.link_kind, cl.title, cl.created_at
+            FROM chat_links cl
+            JOIN projects p ON cl.project_id = p.id
+        """
+        params: list[object] = []
+        if project_id is not None:
+            query += " WHERE cl.project_id = ?"
+            params.append(project_id)
+        query += " ORDER BY cl.id DESC LIMIT 300"
+        rows = self._conn.execute(query, params).fetchall()
+
+        events: list[HistoryEvent] = []
+        for r in rows:
+            kind_lbl = "compartido" if r["link_kind"] == "shared" else "privado"
+            events.append(
+                HistoryEvent(
+                    id=f"chat:{r['id']}",
+                    kind=HistoryEventKind.CHAT_LINK,
+                    project_id=r["project_id"],
+                    project_name=r["project_name"],
+                    title=f"Conversación vinculada: {r['title']}",
+                    description=f"Enlace {kind_lbl}: {r['url']}",
+                    created_at=_parse_dt_safe(r["created_at"]),
+                    agent_kind="gpt",
+                    status="linked",
+                    status_label="Vinculada",
+                    status_style="dim-label",
+                    target_type="workspace",
+                    target_id=r["project_id"],
+                )
+            )
+        return events
+
+    def list_events(
+        self,
+        project_id: int | None = None,
+        kind: HistoryEventKind | None = None,
+        search: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[HistoryEvent], bool]:
+        """Devuelve una tupla (eventos, hay_mas) ordenados cronológicamente."""
+        events: list[HistoryEvent] = []
+
+        if kind is None or kind == HistoryEventKind.PROMPT_TRANSFER:
+            events.extend(self._get_prompt_transfers(project_id))
+        if kind is None or kind == HistoryEventKind.TASK:
+            events.extend(self._get_tasks(project_id))
+            events.extend(self._get_task_history(project_id))
+        if kind is None or kind == HistoryEventKind.BRAIN_PROPOSAL:
+            events.extend(self._get_brain_proposals(project_id))
+        if kind is None or kind == HistoryEventKind.CHAT_LINK:
+            events.extend(self._get_chat_links(project_id))
+
+        if search.strip():
+            term = search.strip().lower()
+            events = [
+                e
+                for e in events
+                if term in e.title.lower()
+                or term in e.description.lower()
+                or term in e.project_name.lower()
+                or (e.agent_kind and term in e.agent_kind.lower())
+                or (e.status_label and term in e.status_label.lower())
+            ]
+
+        # Ordenar cronológicamente (más reciente primero; actualizaciones desempatan antes que creaciones simultáneas)
+        events.sort(
+            key=lambda e: (e.created_at, 1 if (e.id.startswith("th:") or e.id.startswith("bp_rev:")) else 0),
+            reverse=True,
+        )
+
+        sliced = events[offset : offset + limit + 1]
+        has_more = len(sliced) > limit
+        return sliced[:limit], has_more
