@@ -1016,6 +1016,173 @@ while True:
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
 
+    # ---- Pruebas de Regresión de Seguridad: Base Activa Corrupta (Fase 7B.5B) ----------
+
+    def test_corrupted_database_restorable_when_app_is_fully_closed(self) -> None:
+        """1. Una base SQLite activa corrupta puede restaurarse cuando IA Workspace está cerrado."""
+        source_dir = self.base_dir / "src_corrupt_ok"
+        source_dir.mkdir()
+        source_paths = AppPaths(source_dir)
+        db_src = self._create_fixture_workspace(source_paths.database, source_paths.brain_dir, project_name="Recuperado_Post_Corrupcion")
+        bkp = BackupService(source_paths, db=db_src).create_backup()
+        db_src.close()
+
+        # Workspace destino con SQLite activo completamente corrupto
+        self.paths.database.write_bytes(b"BYTES_CORRUPTOS_DE_PRUEBA_TOTALMENTE_INVALIDOS_PARA_SQLITE")
+
+        restore_service = RestoreService(self.paths)
+        report = restore_service.restore_backup(bkp, confirmed=True)
+        self.assertTrue(report.integrity_ok)
+
+        # Verificar que la base activa vuelve a ser legible y contiene los datos restaurados
+        conn = sqlite3.connect(self.paths.database)
+        self.assertEqual(conn.execute("SELECT name FROM projects").fetchone()[0], "Recuperado_Post_Corrupcion")
+        conn.close()
+
+    def test_corrupted_database_never_bypasses_restore_lock(self) -> None:
+        """2. La corrupción de la base activa nunca permite omitir .restore.lock."""
+        source_dir = self.base_dir / "src_corrupt_rlock"
+        source_dir.mkdir()
+        source_paths = AppPaths(source_dir)
+        db_src = self._create_fixture_workspace(source_paths.database, source_paths.brain_dir)
+        bkp = BackupService(source_paths, db=db_src).create_backup()
+        db_src.close()
+
+        # Base corrupta
+        self.paths.database.write_bytes(b"CORRUPTED_DB_BYTES")
+
+        # Proceso externo reteniendo .restore.lock
+        holder_code = """
+import os, sys, fcntl
+from pathlib import Path
+data_dir = Path(sys.argv[1])
+flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+fd = os.open(data_dir / ".restore.lock", flags, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+sys.stdout.write("HELD\\n")
+sys.stdout.flush()
+sys.stdin.readline()
+fcntl.flock(fd, fcntl.LOCK_UN)
+os.close(fd)
+"""
+        proc = subprocess.Popen(
+            [sys.executable, "-c", holder_code, str(self.paths.data_dir)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            env=self._subproc_env(),
+        )
+        self.assertEqual(proc.stdout.readline().strip(), "HELD")
+
+        try:
+            restore_service = RestoreService(self.paths)
+            with self.assertRaises(RestoreExclusivityError) as ctx:
+                restore_service.restore_backup(bkp, confirmed=True)
+            self.assertIn("Otra operación de restauración está en ejecución", str(ctx.exception))
+        finally:
+            proc.stdin.write("QUIT\n")
+            proc.stdin.flush()
+            proc.stdout.close()
+            proc.stdin.close()
+            proc.wait(timeout=5)
+
+    def test_corrupted_database_rejected_when_app_lock_is_held_by_process(self) -> None:
+        """3. Si .app.lock está retenido por un proceso activo, la restauración se rechaza incluso con SQLite corrupta."""
+        source_dir = self.base_dir / "src_corrupt_applock"
+        source_dir.mkdir()
+        source_paths = AppPaths(source_dir)
+        db_src = self._create_fixture_workspace(source_paths.database, source_paths.brain_dir)
+        bkp = BackupService(source_paths, db=db_src).create_backup()
+        db_src.close()
+
+        # Base activa corrupta
+        self.paths.database.write_bytes(b"GARBAGE_CRASH_DATA_IN_DB_FILE")
+
+        # Proceso externo reteniendo .app.lock
+        holder_code = """
+import os, sys, fcntl
+from pathlib import Path
+data_dir = Path(sys.argv[1])
+flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+fd = os.open(data_dir / ".app.lock", flags, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+sys.stdout.write("APP_RUNNING\\n")
+sys.stdout.flush()
+sys.stdin.readline()
+fcntl.flock(fd, fcntl.LOCK_UN)
+os.close(fd)
+"""
+        proc = subprocess.Popen(
+            [sys.executable, "-c", holder_code, str(self.paths.data_dir)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            env=self._subproc_env(),
+        )
+        self.assertEqual(proc.stdout.readline().strip(), "APP_RUNNING")
+
+        try:
+            restore_service = RestoreService(self.paths)
+            with self.assertRaises(RestoreExclusivityError) as ctx:
+                restore_service.restore_backup(bkp, confirmed=True)
+            self.assertIn("la aplicación se encuentra en ejecución", str(ctx.exception))
+        finally:
+            proc.stdin.write("QUIT\n")
+            proc.stdin.flush()
+            proc.stdout.close()
+            proc.stdin.close()
+            proc.wait(timeout=5)
+
+    def test_corrupted_db_exception_does_not_mask_permission_or_lock_errors(self) -> None:
+        """4. La excepción solo admite errores de formato/integridad; no ignora errores de bloqueo de SQLite activo."""
+        source_dir = self.base_dir / "src_corrupt_filter"
+        source_dir.mkdir()
+        source_paths = AppPaths(source_dir)
+        db_src = self._create_fixture_workspace(source_paths.database, source_paths.brain_dir)
+        bkp = BackupService(source_paths, db=db_src).create_backup()
+        db_src.close()
+
+        # Destino con base SQLite válida pero bloqueada por otra transacción activa (OperationalError: database is locked)
+        db_dst = self._create_fixture_workspace(self.paths.database, self.paths.brain_dir)
+        db_dst.conn.execute("BEGIN EXCLUSIVE")
+
+        restore_service = RestoreService(self.paths)
+        with self.assertRaises(RestoreExclusivityError) as ctx:
+            restore_service.restore_backup(bkp, confirmed=True)
+        self.assertIn("utilizada por otra conexión o lector", str(ctx.exception))
+
+        db_dst.conn.execute("ROLLBACK")
+        db_dst.close()
+
+    def test_failed_lock_acquisition_does_not_modify_or_delete_corrupted_file(self) -> None:
+        """5. Si falla la adquisición de bloqueos, no se modifica ni elimina la información existente."""
+        source_dir = self.base_dir / "src_no_delete"
+        source_dir.mkdir()
+        source_paths = AppPaths(source_dir)
+        db_src = self._create_fixture_workspace(source_paths.database, source_paths.brain_dir)
+        bkp = BackupService(source_paths, db=db_src).create_backup()
+        db_src.close()
+
+        corrupt_content = b"ORIGINAL_CORRUPT_BYTES_MUST_REMAIN_UNTOUCHED_12345"
+        self.paths.database.write_bytes(corrupt_content)
+
+        # Retener .app.lock para forzar fallo en _acquire_exclusive_locks
+        app_lock = self.paths.data_dir / ".app.lock"
+        fd = open(app_lock, "w+")
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        try:
+            restore_service = RestoreService(self.paths)
+            with self.assertRaises(RestoreExclusivityError):
+                restore_service.restore_backup(bkp, confirmed=True)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            fd.close()
+
+        # El archivo no debe haber sido tocado ni eliminado
+        self.assertTrue(self.paths.database.exists())
+        self.assertEqual(self.paths.database.read_bytes(), corrupt_content)
+
 
 if __name__ == "__main__":
     unittest.main()

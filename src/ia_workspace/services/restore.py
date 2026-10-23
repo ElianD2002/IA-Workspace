@@ -416,9 +416,16 @@ class RestoreService:
                     conn.execute("BEGIN EXCLUSIVE")
                     conn.execute("ROLLBACK")
                 except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
-                    raise RestoreExclusivityError(
-                        f"No se puede restaurar: la base de datos está siendo utilizada por otra conexión o lector ({exc})."
-                    ) from exc
+                    # Si el archivo en disco no es una base de datos SQLite válida o está corrupto,
+                    # no está bloqueado por otra conexión WAL activa; la restauración debe proceder
+                    # a sustituirlo (objetivo principal del asistente offline ante desastres).
+                    msg = str(exc).lower()
+                    if "file is not a database" in msg or "database disk image is malformed" in msg or "unsupported file format" in msg:
+                        pass
+                    else:
+                        raise RestoreExclusivityError(
+                            f"No se puede restaurar: la base de datos está siendo utilizada por otra conexión o lector ({exc})."
+                        ) from exc
                 finally:
                     conn.close()
                     handles["conn"] = None

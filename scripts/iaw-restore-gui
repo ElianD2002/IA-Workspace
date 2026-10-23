@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Asistente gráfico independiente para recuperación de respaldos de IA Workspace.
+# Ejecutable offline: no inicia IAWorkspaceApplication, WebKit ni agentes.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPYCACHEPREFIX="${PYTHONPYCACHEPREFIX:-$ROOT/var/pycache}"
+exec python3 -m ia_workspace.ui.dialogs.restore_assistant "$@"
