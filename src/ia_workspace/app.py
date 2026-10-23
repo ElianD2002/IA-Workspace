@@ -60,6 +60,7 @@ class IAWorkspaceApplication(Adw.Application):
         self.ctx: AppContext | None = None
         self._window = None
         self._quitting = False
+        self._last_quit_dialog = None
         self.terminal_backends: list = []
 
     # ---- ciclo de vida ---------------------------------------------------------
@@ -224,6 +225,8 @@ class IAWorkspaceApplication(Adw.Application):
         """Salida completa solicitada por el usuario. Confirma si hay agentes activos."""
         if self._quitting or self.ctx is None:
             return
+        if self._last_quit_dialog is not None:
+            return
         active = self.ctx.sessions.active_sessions()
         if not active or self._window is None:
             self._shutdown_sessions_and_quit()
@@ -231,10 +234,12 @@ class IAWorkspaceApplication(Adw.Application):
         from ia_workspace.ui.dialogs.confirm_quit import build_confirm_quit_dialog
 
         dialog = build_confirm_quit_dialog(self.ctx, active)
+        self._last_quit_dialog = dialog
         dialog.connect("response", self._on_quit_response)
         dialog.present(self._window)
 
     def _on_quit_response(self, _dialog: Adw.AlertDialog, response: str) -> None:
+        self._last_quit_dialog = None
         if response == "quit":
             self._shutdown_sessions_and_quit()
 

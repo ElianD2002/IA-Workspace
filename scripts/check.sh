@@ -82,6 +82,7 @@ run_ui_test test_copy_on_select_ui "Copiar al seleccionar con ratón real y sele
 run_ui_test test_tasks_ui "Tareas y prompts vinculados a agentes"
 run_ui_test test_prompt_templates_ui "Biblioteca de plantillas de prompts"
 run_ui_test test_history_ui "Historial y revisión de actividad"
+run_ui_test test_multiproject_sessions_ui "Continuidad y aislamiento de sesiones multiproyecto"
 
 # Ningún dato de cuenta (de los dobles de prueba) debe acabar en registros.
 if grep -rIl -E "persona@example\.invalid|FAKE-ORG-SECRET-123|sim_session_7f3a" "$ROOT/var"/*.log 2>/dev/null; then
