@@ -22,7 +22,9 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import signal
 import sqlite3
+import subprocess
 import sys
 import tarfile
 import unittest
@@ -30,6 +32,8 @@ import unittest
 tests_dir = Path(__file__).resolve().parent
 if str(tests_dir) not in sys.path:
     sys.path.insert(0, str(tests_dir))
+
+SRC_DIR = tests_dir.parent / "src"
 
 from helpers import temp_dir
 
@@ -715,6 +719,302 @@ class RestoreServiceTests(unittest.TestCase):
             self.assertIn("supera el límite permitido", str(ctx.exception))
         finally:
             restore_mod.MAX_FILE_BYTES = orig_limit
+
+    # ---- Pruebas Multiproceso Aisladas (Fase 7B.4A) -----------------------------------
+
+    def _subproc_env(self) -> dict[str, str]:
+        env = dict(os.environ)
+        env["PYTHONPATH"] = f"{SRC_DIR}:{env.get('PYTHONPATH', '')}"
+        return env
+
+    def test_multiprocess_active_app_rejects_and_closed_allows_restore(self) -> None:
+        """Verifica que un proceso independiente simulando la aplicación activa rechace la restauración,
+        y que una vez finalizado el proceso la restauración se autorice inmediatamente."""
+        source_dir = self.base_dir / "src_mp_active"
+        source_dir.mkdir()
+        source_paths = AppPaths(source_dir)
+        db_src = self._create_fixture_workspace(source_paths.database, source_paths.brain_dir, project_name="Origen MP")
+        bkp = BackupService(source_paths, db=db_src).create_backup()
+        db_src.close()
+
+        # Workspace destino
+        db_dst = self._create_fixture_workspace(self.paths.database, self.paths.brain_dir, project_name="Destino MP Previo")
+        db_dst.close()
+
+        child_code = """
+import os, sys, fcntl
+from pathlib import Path
+data_dir = Path(sys.argv[1])
+flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+fd = os.open(data_dir / ".app.lock", flags, 0o600)
+os.set_inheritable(fd, False)
+fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+sys.stdout.write("READY\\n")
+sys.stdout.flush()
+# Esperar orden de salida en stdin
+sys.stdin.readline()
+fcntl.flock(fd, fcntl.LOCK_UN)
+os.close(fd)
+sys.exit(0)
+"""
+        proc = subprocess.Popen(
+            [sys.executable, "-c", child_code, str(self.paths.data_dir)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            env=self._subproc_env(),
+        )
+
+        ready_line = proc.stdout.readline()
+        self.assertEqual(ready_line.strip(), "READY")
+
+        try:
+            restore_service = RestoreService(self.paths)
+            with self.assertRaises(RestoreExclusivityError) as ctx:
+                restore_service.restore_backup(bkp, confirmed=True)
+            self.assertIn("la aplicación se encuentra en ejecución", str(ctx.exception))
+        finally:
+            proc.stdin.write("QUIT\n")
+            proc.stdin.flush()
+            proc.stdout.close()
+            proc.stdin.close()
+            proc.wait(timeout=5)
+
+        # Con el proceso cerrado, la restauración debe funcionar sin errores
+        restore_service = RestoreService(self.paths)
+        report = restore_service.restore_backup(bkp, confirmed=True)
+        self.assertTrue(report.integrity_ok)
+
+        verify_conn = sqlite3.connect(self.paths.database)
+        self.assertEqual(verify_conn.execute("SELECT name FROM projects").fetchone()[0], "Origen MP")
+        verify_conn.close()
+
+    def test_multiprocess_simultaneous_startup_and_restore(self) -> None:
+        """Verifica que cuando RestoreService mantiene el bloqueo exclusivo,
+        el intento de inicio de la aplicación se bloquee sin abrir SQLite ni corromper datos."""
+        source_dir = self.base_dir / "src_simultaneous"
+        source_dir.mkdir()
+        source_paths = AppPaths(source_dir)
+        db_src = self._create_fixture_workspace(source_paths.database, source_paths.brain_dir)
+        bkp = BackupService(source_paths, db=db_src).create_backup()
+        db_src.close()
+
+        # Destino
+        db_dst = self._create_fixture_workspace(self.paths.database, self.paths.brain_dir)
+        db_dst.close()
+
+        # Proceso que simula una restauración reteniendo ambos bloqueos
+        restore_holder_code = """
+import os, sys, fcntl
+from pathlib import Path
+data_dir = Path(sys.argv[1])
+flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+r_fd = os.open(data_dir / ".restore.lock", flags, 0o600)
+os.set_inheritable(r_fd, False)
+fcntl.flock(r_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+a_fd = os.open(data_dir / ".app.lock", flags, 0o600)
+os.set_inheritable(a_fd, False)
+fcntl.flock(a_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+sys.stdout.write("HOLDING\\n")
+sys.stdout.flush()
+sys.stdin.readline()
+fcntl.flock(a_fd, fcntl.LOCK_UN)
+fcntl.flock(r_fd, fcntl.LOCK_UN)
+os.close(a_fd)
+os.close(r_fd)
+sys.exit(0)
+"""
+        holder = subprocess.Popen(
+            [sys.executable, "-c", restore_holder_code, str(self.paths.data_dir)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            env=self._subproc_env(),
+        )
+        line = holder.stdout.readline()
+        self.assertEqual(line.strip(), "HOLDING")
+
+        app_starter_code = """
+import sys
+from pathlib import Path
+from gi.repository import Gio
+from ia_workspace.app import IAWorkspaceApplication
+from ia_workspace.config import AppPaths
+
+paths = AppPaths(Path(sys.argv[1]))
+app = IAWorkspaceApplication(paths)
+app.set_flags(Gio.ApplicationFlags.NON_UNIQUE)
+app.register(None)
+
+if app._lock_failed and app.ctx is None:
+    sys.exit(42)  # Bloqueado exitosamente sin acceso a SQLite
+sys.exit(0)
+"""
+        try:
+            starter = subprocess.run(
+                [sys.executable, "-c", app_starter_code, str(self.paths.data_dir)],
+                capture_output=True,
+                text=True,
+                env=self._subproc_env(),
+            )
+            self.assertEqual(starter.returncode, 42)
+        finally:
+            holder.stdin.write("QUIT\n")
+            holder.stdin.flush()
+            holder.stdout.close()
+            holder.stdin.close()
+            holder.wait(timeout=5)
+
+    def test_multiprocess_two_simultaneous_restores(self) -> None:
+        """Verifica que dos procesos de restauración independientes compitiendo por el mismo workspace
+        se serialicen mediante .restore.lock: exactamente uno triunfa y el otro es rechazado con exclusividad."""
+        source_dir = self.base_dir / "src_two_restores"
+        source_dir.mkdir()
+        source_paths = AppPaths(source_dir)
+        db_src = self._create_fixture_workspace(source_paths.database, source_paths.brain_dir, project_name="Restaurado MP")
+        bkp = BackupService(source_paths, db=db_src).create_backup()
+        db_src.close()
+
+        # Destino previo
+        db_dst = self._create_fixture_workspace(self.paths.database, self.paths.brain_dir, project_name="Original Previo")
+        db_dst.close()
+
+        restore_code_slow = """
+import sys, time
+from pathlib import Path
+from ia_workspace.config import AppPaths
+from ia_workspace.services.restore import RestoreService, RestoreExclusivityError
+
+paths = AppPaths(Path(sys.argv[1]))
+bkp = Path(sys.argv[2])
+
+class SlowRestore(RestoreService):
+    def _apply_staged_restore(self, staging_dir, backup_dir):
+        time.sleep(0.5)
+        return super()._apply_staged_restore(staging_dir, backup_dir)
+
+srv = SlowRestore(paths)
+try:
+    srv.restore_backup(bkp, confirmed=True)
+    sys.exit(0)
+except RestoreExclusivityError:
+    sys.exit(42)
+except Exception:
+    sys.exit(99)
+"""
+
+        restore_code_fast = """
+import sys, time
+from pathlib import Path
+from ia_workspace.config import AppPaths
+from ia_workspace.services.restore import RestoreService, RestoreExclusivityError
+
+time.sleep(0.1)  # Comenzar cuando SlowRestore ya ha adquirido el lock exclusivo
+paths = AppPaths(Path(sys.argv[1]))
+bkp = Path(sys.argv[2])
+srv = RestoreService(paths)
+try:
+    srv.restore_backup(bkp, confirmed=True)
+    sys.exit(0)
+except RestoreExclusivityError:
+    sys.exit(42)
+except Exception:
+    sys.exit(99)
+"""
+        p1 = subprocess.Popen(
+            [sys.executable, "-c", restore_code_slow, str(self.paths.data_dir), str(bkp)],
+            env=self._subproc_env(),
+        )
+        p2 = subprocess.Popen(
+            [sys.executable, "-c", restore_code_fast, str(self.paths.data_dir), str(bkp)],
+            env=self._subproc_env(),
+        )
+
+        c1 = p1.wait(timeout=10)
+        c2 = p2.wait(timeout=10)
+        # Uno debe salir con código 0 y el otro con 42 (RestoreExclusivityError)
+        self.assertEqual(sorted([c1, c2]), [0, 42])
+
+        # Verificar integridad del workspace resultante
+        conn = sqlite3.connect(self.paths.database)
+        self.assertEqual(conn.execute("SELECT name FROM projects").fetchone()[0], "Restaurado MP")
+        conn.close()
+
+    def test_multiprocess_lock_release_on_normal_close_and_sigkill(self) -> None:
+        """Comprueba que el bloqueo .app.lock se libere tanto en cierre normal como ante terminación abrupta (SIGKILL)."""
+        source_dir = self.base_dir / "src_release_sigkill"
+        source_dir.mkdir()
+        source_paths = AppPaths(source_dir)
+        db_src = self._create_fixture_workspace(source_paths.database, source_paths.brain_dir)
+        bkp = BackupService(source_paths, db=db_src).create_backup()
+        db_src.close()
+
+        # Destino
+        db_dst = self._create_fixture_workspace(self.paths.database, self.paths.brain_dir)
+        db_dst.close()
+
+        app_crash_code = """
+import os, sys, fcntl
+from pathlib import Path
+data_dir = Path(sys.argv[1])
+flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+fd = os.open(data_dir / ".app.lock", flags, 0o600)
+os.set_inheritable(fd, False)
+fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+sys.stdout.write("LOCKED\\n")
+sys.stdout.flush()
+while True:
+    pass
+"""
+        proc = subprocess.Popen(
+            [sys.executable, "-c", app_crash_code, str(self.paths.data_dir)],
+            stdout=subprocess.PIPE,
+            text=True,
+            env=self._subproc_env(),
+        )
+        try:
+            line = proc.stdout.readline()
+            self.assertEqual(line.strip(), "LOCKED")
+
+            restore_service = RestoreService(self.paths)
+            with self.assertRaises(RestoreExclusivityError):
+                restore_service.restore_backup(bkp, confirmed=True)
+
+            # Simular fallo abrupto del proceso (crash/SIGKILL)
+            proc.kill()
+        finally:
+            proc.stdout.close()
+            proc.wait(timeout=5)
+
+        # Inmediatamente tras la muerte del proceso el kernel libera flock y la restauración debe proceder
+        report = restore_service.restore_backup(bkp, confirmed=True)
+        self.assertTrue(report.integrity_ok)
+
+    def test_lock_fd_not_inherited_by_subprocesses(self) -> None:
+        """Comprueba que el descriptor de bloqueo .app.lock tiene O_CLOEXEC y no es heredado por procesos hijos."""
+        lock_path = self.paths.data_dir / ".app.lock"
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+        fd = os.open(lock_path, flags, 0o600)
+        os.set_inheritable(fd, False)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        try:
+            self.assertFalse(os.get_inheritable(fd))
+            # Proceso hijo intentando desbloquear o interactuar con el descriptor heredado
+            child_cmd = f"import fcntl; fcntl.flock({fd}, fcntl.LOCK_UN)"
+            child_res = subprocess.run(
+                [sys.executable, "-c", child_cmd],
+                capture_output=True,
+                text=True,
+            )
+            # Debe fallar con Bad file descriptor (Errno 9) al no haber sido transmitido por execve
+            self.assertNotEqual(child_res.returncode, 0)
+            self.assertTrue("Bad file descriptor" in child_res.stderr or "Errno 9" in child_res.stderr)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
 
 if __name__ == "__main__":

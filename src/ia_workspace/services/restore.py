@@ -358,53 +358,46 @@ class RestoreService:
     def _acquire_exclusive_locks(self) -> dict[str, Any]:
         """Verifica y adquiere bloqueo exclusivo sobre la aplicación y la base SQLite.
 
-        Garantías:
-        1. Adquiere flock exclusivo no bloqueante sobre `.restore.lock` para impedir
-           que dos restauraciones concurrentes modifiquen el destino simultáneamente.
-        2. Comprueba `.app.lock` de la aplicación principal. Si la aplicación está corriendo,
-           flock falla inmediatamente.
-        3. En SQLite WAL, `BEGIN EXCLUSIVE` solo bloquea a otros escritores, no a lectores.
-           Para asegurar que no existen lectores activos ni transacciones concurrentes:
-           - Se configura `PRAGMA busy_timeout = 100`.
-           - Se establece `PRAGMA locking_mode = EXCLUSIVE`.
-           - Se ejecuta `PRAGMA wal_checkpoint(TRUNCATE)`.
-           - Se ejecuta `BEGIN EXCLUSIVE`. Si un lector o proceso mantiene abierta la base,
-             SQLite rechaza la exclusividad con `database is locked`.
-        4. Retorna los manejadores de bloqueo para retenerlos hasta que termine la restauración.
+        Orden fijo de adquisición (para evitar interbloqueos):
+        1. Bloqueo exclusivo sobre `.restore.lock` (serializa procesos de restauración entre sí).
+        2. Bloqueo exclusivo sobre `.app.lock` (impide concurrencia con la aplicación principal).
+        3. Comprobación y bloqueo exclusivo en SQLite WAL (mecanismo secundario de salvaguarda).
+
+        Ambos descriptores se abren con O_CLOEXEC y no heredables, y permanecen
+        retenidos durante toda la restauración (incluyendo preparación, sustitución y rollback).
         """
         db_path = self.paths.database
         self.paths.data_dir.mkdir(parents=True, exist_ok=True)
 
         handles: dict[str, Any] = {"fds": [], "conn": None}
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
 
         try:
-            # 1. Bloqueo de proceso de restauración concurrente
+            # 1. Bloqueo de proceso de restauración concurrente (.restore.lock)
             restore_lock_path = self.paths.data_dir / ".restore.lock"
-            restore_fd = open(restore_lock_path, "a+")
+            restore_fd = os.open(restore_lock_path, flags, 0o600)
+            os.set_inheritable(restore_fd, False)
             try:
                 fcntl.flock(restore_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 handles["fds"].append(restore_fd)
             except (BlockingIOError, OSError) as exc:
-                restore_fd.close()
+                os.close(restore_fd)
                 raise RestoreExclusivityError(
                     "Otra operación de restauración está en ejecución en este workspace."
                 ) from exc
 
             # 2. Bloqueo de la aplicación activa (.app.lock)
             app_lock_path = self.paths.data_dir / ".app.lock"
-            if app_lock_path.exists():
-                try:
-                    app_fd = open(app_lock_path, "r+")
-                    try:
-                        fcntl.flock(app_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        handles["fds"].append(app_fd)
-                    except (BlockingIOError, OSError) as exc:
-                        app_fd.close()
-                        raise RestoreExclusivityError(
-                            "No se puede restaurar: la aplicación se encuentra en ejecución."
-                        ) from exc
-                except FileNotFoundError:
-                    pass
+            app_fd = os.open(app_lock_path, flags, 0o600)
+            os.set_inheritable(app_fd, False)
+            try:
+                fcntl.flock(app_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                handles["fds"].append(app_fd)
+            except (BlockingIOError, OSError) as exc:
+                os.close(app_fd)
+                raise RestoreExclusivityError(
+                    "No se puede restaurar: la aplicación se encuentra en ejecución."
+                ) from exc
 
             # 3. Comprobación y bloqueo exclusivo en SQLite (incluyendo lectores WAL)
             if db_path.exists():
@@ -438,10 +431,10 @@ class RestoreService:
 
     def _release_exclusive_locks(self, handles: dict[str, Any]) -> None:
         """Libera todos los descriptores de bloqueo adquiridos de forma segura."""
-        for fd in handles.get("fds", []):
+        for fd in reversed(handles.get("fds", [])):
             try:
                 fcntl.flock(fd, fcntl.LOCK_UN)
-                fd.close()
+                os.close(fd)
             except Exception:
                 pass
         handles["fds"] = []

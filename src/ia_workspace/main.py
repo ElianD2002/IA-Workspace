@@ -23,7 +23,10 @@ def main(argv: list[str] | None = None) -> int:
     GLib.set_prgname(APP_ID)
 
     app = IAWorkspaceApplication()
-    return app.run(sys.argv if argv is None else argv)
+    ret = app.run(sys.argv if argv is None else argv)
+    if getattr(app, "_lock_failed", False):
+        return 1
+    return ret
 
 
 if __name__ == "__main__":

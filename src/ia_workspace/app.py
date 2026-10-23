@@ -8,6 +8,7 @@ confirmación y se finalizan de forma ordenada antes de terminar el proceso.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import signal
 import sys
@@ -16,7 +17,7 @@ from pathlib import Path
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from ia_workspace import APP_ID, APP_NAME, VERSION
-from ia_workspace.config import resolve_paths
+from ia_workspace.config import AppPaths, resolve_paths
 from ia_workspace.context import AppContext
 from ia_workspace.domain.models import SELECTABLE_AGENTS, AgentKind
 from ia_workspace.persistence.database import Database
@@ -53,21 +54,36 @@ def _glib_schedule(seconds: float, fn: Callback) -> Callback:
 
 
 class IAWorkspaceApplication(Adw.Application):
-    def __init__(self) -> None:
+    def __init__(self, paths: AppPaths | None = None) -> None:
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
         if GLib.get_application_name() != APP_NAME:  # solo una vez por proceso
             GLib.set_application_name(APP_NAME)
+        self.paths = paths
         self.ctx: AppContext | None = None
         self._window = None
         self._quitting = False
         self._last_quit_dialog = None
         self.terminal_backends: list = []
+        self._app_lock_fd: int | None = None
+        self._lock_failed: bool = False
 
     # ---- ciclo de vida ---------------------------------------------------------
 
     def do_startup(self) -> None:
         Adw.Application.do_startup(self)
-        paths = resolve_paths()
+        paths = self.paths or resolve_paths()
+        self.paths = paths
+        try:
+            self._acquire_app_lock(paths)
+        except (BlockingIOError, OSError) as exc:
+            self._lock_failed = True
+            print(
+                f"IA Workspace: no se puede iniciar: workspace bloqueado ({exc})",
+                file=sys.stderr,
+            )
+            self.quit()
+            return
+
         self.ctx = AppContext.create(
             Database(paths.database),
             paths=paths,
@@ -86,6 +102,8 @@ class IAWorkspaceApplication(Adw.Application):
             GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signum, self._on_unix_signal)
 
     def do_activate(self) -> None:
+        if self._lock_failed or self.ctx is None:
+            return
         if self._window is None:
             from ia_workspace.ui.window import MainWindow
 
@@ -106,7 +124,30 @@ class IAWorkspaceApplication(Adw.Application):
         if self.ctx is not None:
             self.ctx.close()
             self.ctx = None
+        self._release_app_lock()
         Adw.Application.do_shutdown(self)
+
+    def _acquire_app_lock(self, paths: AppPaths) -> None:
+        paths.data_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = paths.data_dir / ".app.lock"
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+        fd = os.open(lock_path, flags, 0o600)
+        os.set_inheritable(fd, False)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except Exception:
+            os.close(fd)
+            raise
+        self._app_lock_fd = fd
+
+    def _release_app_lock(self) -> None:
+        if self._app_lock_fd is not None:
+            try:
+                fcntl.flock(self._app_lock_fd, fcntl.LOCK_UN)
+                os.close(self._app_lock_fd)
+            except Exception:
+                pass
+            self._app_lock_fd = None
 
     def _register_terminals(self) -> None:
         try:
