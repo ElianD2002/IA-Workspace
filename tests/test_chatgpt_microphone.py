@@ -136,7 +136,7 @@ class ChatGPTMicrophoneTests(unittest.TestCase):
         else:
             os.environ["IAW_MOCK_MEDIA_DEVICES"] = self.orig_mock
 
-    def _run_app_scenario(self, setup_fn) -> dict:
+    def _run_app_scenario(self, setup_fn, timeout_seconds: int = 25) -> dict:
         results: dict = {}
         app = Adw.Application(flags=Gio.ApplicationFlags.NON_UNIQUE)
 
@@ -144,9 +144,46 @@ class ChatGPTMicrophoneTests(unittest.TestCase):
             win = Adw.ApplicationWindow(application=a)
             setup_fn(a, win, results)
 
+        def on_timeout() -> bool:
+            results["timed_out"] = True
+            app.quit()
+            return GLib.SOURCE_REMOVE
+
         app.connect("activate", on_activate)
-        app.run([])
+        watchdog = GLib.timeout_add_seconds(timeout_seconds, on_timeout)
+        try:
+            app.run([])
+        finally:
+            GLib.source_remove(watchdog)
         return results
+
+    @staticmethod
+    def _poll_js_result(
+        browser: ChatBrowser,
+        results: dict,
+        on_done,
+        timeout_seconds: float = 12.0,
+        step_ms: int = 100,
+    ) -> None:
+        deadline = time.monotonic() + timeout_seconds
+
+        def check() -> bool:
+            def on_eval(v, r):
+                try:
+                    js_val = v.evaluate_javascript_finish(r)
+                    res = js_val.to_string() if js_val else ""
+                except Exception:
+                    res = ""
+                if (res in ("pending", "", "undefined") or res.startswith("mr-waiting")) and time.monotonic() < deadline:
+                    GLib.timeout_add(step_ms, check)
+                    return
+                results["js"] = res
+                on_done()
+
+            browser.view.evaluate_javascript("window.testResult", -1, None, None, None, on_eval)
+            return GLib.SOURCE_REMOVE
+
+        GLib.timeout_add(step_ms, check)
 
     def test_microphone_permission_granted_delivers_audio_stream(self) -> None:
         """Verifica que al autorizar la solicitud, el stream de audio simulado se entrega."""
@@ -169,18 +206,13 @@ class ChatGPTMicrophoneTests(unittest.TestCase):
             win.present()
             browser.open(1, f"{self.base_url}/audio")
 
-            def check():
-                def on_eval(v, r):
-                    res = v.evaluate_javascript_finish(r).to_string()
-                    results["prompted"] = prompted
-                    results["js"] = res
-                    browser.stop_capture()
-                    browser.close()
-                    app.quit()
+            def finish() -> None:
+                results["prompted"] = prompted
+                browser.stop_capture()
+                browser.close()
+                app.quit()
 
-                browser.view.evaluate_javascript("window.testResult", -1, None, None, None, on_eval)
-
-            GLib.timeout_add(1000, check)
+            self._poll_js_result(browser, results, finish)
 
         res = self._run_app_scenario(scenario)
         prompted = res.get("prompted", [])
@@ -211,17 +243,12 @@ class ChatGPTMicrophoneTests(unittest.TestCase):
             win.present()
             browser.open(2, f"{self.base_url}/audio")
 
-            def check():
-                def on_eval(v, r):
-                    res = v.evaluate_javascript_finish(r).to_string()
-                    results["prompted"] = prompted
-                    results["js"] = res
-                    browser.close()
-                    app.quit()
+            def finish() -> None:
+                results["prompted"] = prompted
+                browser.close()
+                app.quit()
 
-                browser.view.evaluate_javascript("window.testResult", -1, None, None, None, on_eval)
-
-            GLib.timeout_add(1000, check)
+            self._poll_js_result(browser, results, finish)
 
         res = self._run_app_scenario(scenario)
         self.assertEqual(len(res.get("prompted", [])), 1)
@@ -244,17 +271,12 @@ class ChatGPTMicrophoneTests(unittest.TestCase):
             win.present()
             browser.open(3, f"{self.base_url}/video")
 
-            def check():
-                def on_eval(v, r):
-                    res = v.evaluate_javascript_finish(r).to_string()
-                    results["prompted"] = prompted
-                    results["js"] = res
-                    browser.close()
-                    app.quit()
+            def finish() -> None:
+                results["prompted"] = prompted
+                browser.close()
+                app.quit()
 
-                browser.view.evaluate_javascript("window.testResult", -1, None, None, None, on_eval)
-
-            GLib.timeout_add(1000, check)
+            self._poll_js_result(browser, results, finish)
 
         res = self._run_app_scenario(scenario)
         self.assertEqual(res.get("prompted", []), [])
@@ -283,17 +305,13 @@ class ChatGPTMicrophoneTests(unittest.TestCase):
             </script></body></html>"""
             browser.view.load_html(html, "https://example.com/")
 
-            def check():
-                def on_eval(v, r):
-                    res = v.evaluate_javascript_finish(r).to_string()
-                    results["prompted"] = prompted
-                    results["js"] = res
-                    browser.close()
-                    app.quit()
+            def finish() -> None:
+                results["prompted"] = prompted
+                browser.close()
+                app.quit()
 
-                browser.view.evaluate_javascript("window.testResult", -1, None, None, None, on_eval)
+            self._poll_js_result(browser, results, finish)
 
-            GLib.timeout_add(1000, check)
 
         res = self._run_app_scenario(scenario)
         self.assertEqual(res.get("prompted", []), [])
@@ -358,16 +376,11 @@ class ChatGPTMicrophoneTests(unittest.TestCase):
             win.present()
             browser.open(4, f"{self.base_url}/recorder")
 
-            def check():
-                def on_eval(v, r):
-                    res = v.evaluate_javascript_finish(r).to_string()
-                    results["js"] = res
-                    browser.close()
-                    app.quit()
+            def finish() -> None:
+                browser.close()
+                app.quit()
 
-                browser.view.evaluate_javascript("window.testResult", -1, None, None, None, on_eval)
-
-            GLib.timeout_add(1200, check)
+            self._poll_js_result(browser, results, finish, timeout_seconds=12.0)
 
         res = self._run_app_scenario(scenario)
         js_result = res.get("js", "")
