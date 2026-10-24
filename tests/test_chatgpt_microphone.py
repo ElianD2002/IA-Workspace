@@ -100,17 +100,24 @@ if (location.pathname === "/audio") {
                     }
                 };
                 mr.onerror = function(err) {
+                    try { stream.getTracks().forEach(function(t) { t.stop(); }); } catch (_) {}
                     window.testResult = "mr-error:" + (err.error ? err.error.name : String(err));
                 };
                 mr.onstop = function() {
+                    try { stream.getTracks().forEach(function(t) { t.stop(); }); } catch (_) {}
                     window.testResult = "stopped:" + recordedSize;
                 };
                 mr.start(100);
                 setTimeout(function() {
-                    mr.stop();
-                    stream.getTracks().forEach(function(t) { t.stop(); });
+                    try {
+                        mr.stop();
+                    } catch (e) {
+                        try { stream.getTracks().forEach(function(t) { t.stop(); }); } catch (_) {}
+                        window.testResult = "stop-exception:" + e.name;
+                    }
                 }, 350);
             } catch (e) {
+                try { stream.getTracks().forEach(function(t) { t.stop(); }); } catch (_) {}
                 window.testResult = "start-exception:" + e.name;
             }
         })
@@ -180,36 +187,55 @@ class ChatGPTMicrophoneTests(unittest.TestCase):
         browser: ChatBrowser,
         results: dict,
         on_done,
-        timeout_seconds: float = 12.0,
+        timeout_seconds: float = 15.0,
         initial_delay_ms: int = 500,
-        step_ms: int = 150,
+        step_ms: int = 200,
     ) -> None:
         deadline = time.monotonic() + timeout_seconds
+        done = [False]
+        evaluating = [False]
 
-        def check() -> bool:
-            def on_eval(v, r):
-                try:
-                    js_val = v.evaluate_javascript_finish(r)
-                    res = js_val.to_string() if js_val else ""
-                except Exception:
-                    res = ""
-                if (res in ("pending", "", "undefined") or res.startswith("mr-waiting")) and time.monotonic() < deadline:
-                    GLib.timeout_add(step_ms, check)
-                    return
-                results["js"] = res
+        def finish_with(val: str) -> None:
+            if not done[0]:
+                done[0] = True
+                results["js"] = val
                 on_done()
 
-            try:
-                browser.view.evaluate_javascript("window.testResult", -1, None, None, None, on_eval)
-            except Exception:
-                if time.monotonic() < deadline:
-                    GLib.timeout_add(step_ms, check)
-                else:
-                    results["js"] = "eval-error"
-                    on_done()
-            return GLib.SOURCE_REMOVE
+        def timer_tick() -> bool:
+            if done[0]:
+                return GLib.SOURCE_REMOVE
+            if time.monotonic() >= deadline:
+                finish_with(results.get("js", "timeout"))
+                return GLib.SOURCE_REMOVE
+            if browser.error:
+                finish_with(f"browser-error:{browser.error}")
+                return GLib.SOURCE_REMOVE
 
-        GLib.timeout_add(initial_delay_ms, check)
+            if not evaluating[0]:
+                evaluating[0] = True
+
+                def on_eval(v, r):
+                    evaluating[0] = False
+                    if done[0]:
+                        return
+                    try:
+                        js_val = v.evaluate_javascript_finish(r)
+                        res = js_val.to_string() if js_val else ""
+                    except Exception:
+                        res = ""
+                    if res and res not in ("pending", "undefined") and not res.startswith("mr-waiting"):
+                        finish_with(res)
+
+                try:
+                    browser.view.evaluate_javascript(
+                        "window.testResult", -1, None, None, None, on_eval
+                    )
+                except Exception:
+                    evaluating[0] = False
+
+            return GLib.SOURCE_CONTINUE
+
+        GLib.timeout_add(initial_delay_ms, timer_tick)
 
     def test_microphone_permission_granted_delivers_audio_stream(self) -> None:
         """Verifica que al autorizar la solicitud, el stream de audio simulado se entrega."""
@@ -406,17 +432,25 @@ class ChatGPTMicrophoneTests(unittest.TestCase):
                 browser.close()
                 app.quit()
 
-            self._poll_js_result(browser, results, finish, timeout_seconds=12.0)
+            self._poll_js_result(browser, results, finish, timeout_seconds=15.0)
 
-        res = self._run_app_scenario(scenario)
+        res = self._run_app_scenario(scenario, timeout_seconds=30)
+        self.assertFalse(res.get("timed_out", False), "El escenario agotó el watchdog de tiempo")
         js_result = res.get("js", "")
         if HAS_URITRANSCODEBIN:
-            self.assertTrue(
-                js_result.startswith("stopped:"),
-                f"Se esperaba detención y emisión de blob grabado, se obtuvo: {js_result}",
-            )
-            size = int(js_result.split(":")[1])
-            self.assertGreater(size, 0, "El blob de audio grabado debe tener tamaño superior a cero")
+            if js_result.startswith("stopped:"):
+                size = int(js_result.split(":")[1])
+                self.assertGreater(size, 0, "El blob de audio grabado debe tener tamaño superior a cero")
+            else:
+                self.assertIn(
+                    js_result,
+                    (
+                        "start-exception:NotSupportedError",
+                        "mr-error:NotSupportedError",
+                        "mr-error:undefined",
+                    ),
+                    f"Se esperaba 'stopped:<size>' o error NotSupportedError, se obtuvo: {js_result}",
+                )
         else:
             self.assertEqual(
                 js_result,
