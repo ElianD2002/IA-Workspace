@@ -19,6 +19,9 @@ Medidas de seguridad:
 from __future__ import annotations
 
 import os
+import tempfile
+import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -36,7 +39,7 @@ except (ValueError, ImportError):  # falta gir1.2-webkit-6.0
     WebKit = None  # type: ignore[assignment]
     WEBKIT_AVAILABLE = False
 
-from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from ia_workspace.services.web_policy import (  # noqa: E402
     Decision,
@@ -109,10 +112,20 @@ class ChatBrowser:
         on_permission_prompt: (
             Callable[[WebKit.UserMediaPermissionRequest, Callable[[bool], None]], None] | None
         ) = None,
+        data_dir: Path | None = None,
+        on_file_chooser_prompt: (
+            Callable[[WebKit.FileChooserRequest, Callable[[str], None]], None] | None
+        ) = None,
+        on_no_image_prompt: (
+            Callable[[WebKit.FileChooserRequest, Callable[[str], None]], None] | None
+        ) = None,
     ) -> None:
         self._on_changed = on_changed
         self._on_external = on_external
         self._on_permission_prompt = on_permission_prompt
+        self._on_file_chooser_prompt = on_file_chooser_prompt
+        self._on_no_image_prompt = on_no_image_prompt
+        self._data_dir = data_dir
         if allow_loopback_http is None:
             allow_loopback_http = test_base_url(dict(os.environ)) is not None
         self._allow_loopback = allow_loopback_http
@@ -122,6 +135,8 @@ class ChatBrowser:
         self.notice: str | None = None
         self.loading = False
         self._last_permission_dialog: Adw.AlertDialog | None = None
+        self._last_file_chooser_dialog: Adw.AlertDialog | None = None
+        self._temp_capture_files: set[Path] = set()
 
         self.view = WebKit.WebView(network_session=session, hexpand=True, vexpand=True)
         self.view.set_focusable(True)
@@ -145,6 +160,7 @@ class ChatBrowser:
 
         self.view.connect("decide-policy", self._on_decide_policy)
         self.view.connect("permission-request", self._on_permission_request)
+        self.view.connect("run-file-chooser", self._on_run_file_chooser)
         self.view.connect("load-changed", self._on_load_changed)
         self.view.connect("load-failed", self._on_load_failed)
         self.view.connect("web-process-terminated", self._on_terminated)
@@ -215,13 +231,20 @@ class ChatBrowser:
             self.view.set_microphone_capture_state(WebKit.MediaCaptureState.NONE)
 
     def close(self) -> None:
-        """Cierra la conversación actual y detiene la captura de audio."""
+        """Cierra la conversación actual, detiene capturas y limpia temporales."""
         if self._last_permission_dialog is not None:
             try:
                 self._last_permission_dialog.force_close()
             except Exception:
                 pass
             self._last_permission_dialog = None
+        if self._last_file_chooser_dialog is not None:
+            try:
+                self._last_file_chooser_dialog.force_close()
+            except Exception:
+                pass
+            self._last_file_chooser_dialog = None
+        self._cleanup_all_temp_files()
         self.stop_capture()
         self.link_id = self.url = None
         self.error = self.notice = None
@@ -232,6 +255,7 @@ class ChatBrowser:
         if link_id == self.link_id and self.url == url and self.error is None:
             return False
         self.stop_capture()
+        self._cleanup_all_temp_files()
         self.link_id, self.url = link_id, url
         self.error = self.notice = None
         self.view.load_uri(url)
@@ -249,6 +273,7 @@ class ChatBrowser:
     def shutdown(self) -> None:
         """Termina el proceso web de esta vista (al cerrar IA Workspace)."""
         self.stop_capture()
+        self._cleanup_all_temp_files()
         self.view.terminate_web_process()
 
     @property
@@ -353,6 +378,232 @@ class ChatBrowser:
 
     def _on_terminated(self, _view, _reason) -> None:
         self.stop_capture()
+        self._cleanup_all_temp_files()
         self.error = "La vista web se cerró inesperadamente. Recarga para continuar."
         self.loading = False
         self._on_changed()
+
+    # ---- gestión de archivos temporales y portapapeles ------------------------------
+
+    def _init_clipboard_dir(self) -> Path:
+        if self._data_dir is not None:
+            base = self._data_dir / "clipboard_captures"
+        else:
+            base = Path(tempfile.gettempdir()) / f"iaw-clipboard-{os.getuid()}"
+        base.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(base, 0o700)
+        except OSError:
+            pass
+        self._prune_stale_temp_captures(base)
+        return base
+
+    def _prune_stale_temp_captures(self, folder: Path) -> None:
+        """Elimina capturas temporales de más de 15 minutos de sesiones previas."""
+        try:
+            now = time.time()
+            for p in folder.glob("clip_*.png"):
+                try:
+                    if now - p.stat().st_mtime > 900:
+                        p.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+
+    def _cleanup_all_temp_files(self) -> None:
+        """Elimina todos los archivos temporales de capturas gestionados por esta instancia."""
+        for p in list(self._temp_capture_files):
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                pass
+        self._temp_capture_files.clear()
+
+    def _remove_temp_file(self, path: Path) -> bool:
+        """Eliminación diferida una vez que WebKit ha tenido tiempo suficiente de procesarlo."""
+        self._temp_capture_files.discard(path)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return GLib.SOURCE_REMOVE
+
+    # ---- selección de archivos (WebKitFileChooserRequest) ---------------------------
+
+    def _on_run_file_chooser(self, _view, request) -> bool:
+        if WebKit is None or not isinstance(request, WebKit.FileChooserRequest):
+            return False
+
+        uri = self.view.get_uri() or self.url or ""
+        if not is_chatgpt_audio_origin(uri, allow_loopback_http=self._allow_loopback):
+            self._open_standard_file_dialog(request)
+            return True
+
+        self._prompt_file_chooser_options(request)
+        return True
+
+    def _prompt_file_chooser_options(self, request: WebKit.FileChooserRequest) -> None:
+        if self._last_file_chooser_dialog is not None:
+            try:
+                self._last_file_chooser_dialog.force_close()
+            except Exception:
+                pass
+            self._last_file_chooser_dialog = None
+
+        def handle_action(action: str) -> None:
+            self._last_file_chooser_dialog = None
+            if action == "clipboard":
+                self._attach_from_clipboard(request)
+            elif action == "choose_file":
+                self._open_standard_file_dialog(request)
+            else:
+                request.cancel()
+
+        if self._on_file_chooser_prompt is not None:
+            self._on_file_chooser_prompt(request, handle_action)
+            return
+
+        parent = self.view.get_root() or self.view
+        dialog = Adw.AlertDialog(
+            heading="Adjuntar en ChatGPT",
+            body=(
+                "¿Deseas usar la captura de pantalla o imagen copiada en tu portapapeles, "
+                "o seleccionar un archivo desde tu equipo?"
+            ),
+        )
+        dialog.add_response("cancel", "Cancelar")
+        dialog.add_response("choose_file", "Elegir archivo…")
+        dialog.add_response("clipboard", "Usar imagen del portapapeles")
+        dialog.set_response_appearance("clipboard", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("clipboard")
+        dialog.set_close_response("cancel")
+
+        def on_response(_d: Adw.AlertDialog, response: str) -> None:
+            handle_action(response)
+
+        dialog.connect("response", on_response)
+        dialog.present(parent)
+        self._last_file_chooser_dialog = dialog
+
+    def _attach_from_clipboard(self, request: WebKit.FileChooserRequest) -> None:
+        window = self.view.get_root()
+        clipboard = window.get_clipboard() if hasattr(window, "get_clipboard") else None
+        if clipboard is None:
+            display = self.view.get_display() or Gdk.Display.get_default()
+            clipboard = display.get_clipboard() if display else None
+
+        if clipboard is None:
+            self._show_no_image_dialog(request)
+            return
+
+        def on_read_texture(clip, res) -> None:
+            try:
+                texture = clip.read_texture_finish(res)
+            except Exception:
+                texture = None
+
+            if texture is None:
+                self._show_no_image_dialog(request)
+                return
+
+            self._save_and_select_texture(texture, request)
+
+        clipboard.read_texture_async(None, on_read_texture)
+
+    def _save_and_select_texture(
+        self, texture: Gdk.Texture, request: WebKit.FileChooserRequest
+    ) -> None:
+        folder = self._init_clipboard_dir()
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        token = uuid.uuid4().hex[:8]
+        filename = f"clip_{ts}_{token}.png"
+        target_path = folder / filename
+
+        saved = False
+        try:
+            fd = os.open(str(target_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+            os.close(fd)
+            saved = texture.save_to_png(str(target_path))
+        except Exception:
+            saved = False
+
+        if not saved or not target_path.is_file() or target_path.stat().st_size == 0:
+            target_path.unlink(missing_ok=True)
+            self._show_no_image_dialog(request)
+            return
+
+        self._temp_capture_files.add(target_path)
+        request.select_files([str(target_path)])
+
+    def _show_no_image_dialog(self, request: WebKit.FileChooserRequest) -> None:
+        if self._last_file_chooser_dialog is not None:
+            try:
+                self._last_file_chooser_dialog.force_close()
+            except Exception:
+                pass
+            self._last_file_chooser_dialog = None
+
+        def handle_action(action: str) -> None:
+            self._last_file_chooser_dialog = None
+            if action == "choose_file":
+                self._open_standard_file_dialog(request)
+            else:
+                request.cancel()
+
+        if self._on_no_image_prompt is not None:
+            self._on_no_image_prompt(request, handle_action)
+            return
+
+        parent = self.view.get_root() or self.view
+        dialog = Adw.AlertDialog(
+            heading="No hay imagen en el portapapeles",
+            body=(
+                "El portapapeles está vacío o no contiene una imagen válida. "
+                "Copia una captura de pantalla e inténtalo de nuevo, o selecciona un archivo de tu equipo."
+            ),
+        )
+        dialog.add_response("cancel", "Cancelar")
+        dialog.add_response("choose_file", "Elegir archivo…")
+        dialog.set_response_appearance("choose_file", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("choose_file")
+        dialog.set_close_response("cancel")
+
+        def on_response(_d: Adw.AlertDialog, response: str) -> None:
+            handle_action(response)
+
+        dialog.connect("response", on_response)
+        dialog.present(parent)
+        self._last_file_chooser_dialog = dialog
+
+    def _open_standard_file_dialog(self, request: WebKit.FileChooserRequest) -> None:
+        window = self.view.get_root()
+        parent_window = window if isinstance(window, Gtk.Window) else None
+
+        file_dialog = Gtk.FileDialog(title="Elegir archivo para adjuntar")
+        if request.get_select_multiple():
+            def on_multiple_open(_source, result):
+                try:
+                    files = file_dialog.open_multiple_finish(result)
+                    paths = [f.get_path() for f in files if f.get_path()]
+                    if paths:
+                        request.select_files(paths)
+                    else:
+                        request.cancel()
+                except Exception:
+                    request.cancel()
+
+            file_dialog.open_multiple(parent_window, None, on_multiple_open)
+        else:
+            def on_single_open(_source, result):
+                try:
+                    f = file_dialog.open_finish(result)
+                    path = f.get_path() if f else None
+                    if path:
+                        request.select_files([path])
+                    else:
+                        request.cancel()
+                except Exception:
+                    request.cancel()
+
+            file_dialog.open(parent_window, None, on_single_open)

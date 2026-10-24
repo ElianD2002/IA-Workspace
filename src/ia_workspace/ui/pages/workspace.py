@@ -471,10 +471,12 @@ class WorkspaceView(Page):
         if self._browser is None:
             from ia_workspace.ui.chatgpt_browser import ChatBrowser, network_session
 
+            data_dir = self._web_data_dir()
             self._browser = ChatBrowser(
-                network_session(self._web_data_dir()),
+                network_session(data_dir),
                 on_changed=self._update_web_ui,
                 on_external=self._open_uri,
+                data_dir=data_dir,
             )
             self._place_browser(self._web_host)
         return self._browser
