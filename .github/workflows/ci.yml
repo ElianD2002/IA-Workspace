@@ -37,7 +37,7 @@ jobs:
         run: |
           python3 -m compileall -q src scripts tests
           if command -v ruff >/dev/null 2>&1; then
-            ruff check --select E9,F63,F7,F82 .
+            ruff check .
           fi
           git diff --check
 
