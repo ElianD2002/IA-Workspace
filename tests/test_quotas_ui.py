@@ -283,6 +283,7 @@ class QuotasUITests(unittest.TestCase):
             AgentKind.CLAUDE_CODE,
             extra=extra,
             prompt="mi prompt importante",
+            which=lambda _: "/fake/claude",
             context="Cerebro: referencia",
             autonomy_mode=AutonomyMode.AUTO,
         )
