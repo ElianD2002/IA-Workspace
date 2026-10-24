@@ -27,8 +27,10 @@ jobs:
             gir1.2-adw-1 \
             gir1.2-webkit-6.0 \
             gir1.2-vte-3.91 \
-            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-alsa \
             gstreamer1.0-pipewire \
             desktop-file-utils
           sudo apt-get install -y ruff 2>/dev/null || python3 -m pip install --break-system-packages ruff 2>/dev/null || true

@@ -53,12 +53,19 @@ mkdir -p "$ROOT/var"
 run_ui_test() {  # $1 = módulo, $2 = título
   echo "== $2 (Broadway aislado)"
   local log="$ROOT/var/$1.log"
-  (cd tests && python3 -m unittest -v "$1") 2>&1 | tee "$log" | tail -3
-  if grep -E "(CRITICAL|Gtk-WARNING|Adwaita-WARNING|Vte-WARNING|GLib-WARNING|Warning: g_|Traceback)" "$log"; then
-    echo "La prueba $1 emitió avisos de GTK" >&2
+  local exit_code=0
+  (cd tests && python3 -m unittest -v "$1") > "$log" 2>&1 || exit_code=$?
+  tail -3 "$log"
+  if [[ $exit_code -ne 0 ]] || ! grep -q "^OK" "$log"; then
+    echo "ERROR: La prueba $1 falló. Detalle del log:" >&2
+    cat "$log" >&2
     exit 1
   fi
-  grep -q "^OK" "$log"
+  if grep -E "(CRITICAL|Gtk-WARNING|Adwaita-WARNING|Vte-WARNING|GLib-WARNING|Warning: g_|Traceback)" "$log"; then
+    echo "La prueba $1 emitió avisos de GTK" >&2
+    cat "$log" >&2
+    exit 1
+  fi
   if grep -q "skipped" "$log"; then
     echo "AVISO: $1 se omitió (¿falta display o gir1.2-vte-3.91?)" >&2
   fi
