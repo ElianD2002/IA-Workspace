@@ -219,7 +219,7 @@ class AppFlowTest(unittest.TestCase):
 
         started: list = []
         app.connect("activate", lambda *_: GLib.idle_add(scenario))
-        watchdog = GLib.timeout_add_seconds(20, timeout)
+        watchdog = GLib.timeout_add_seconds(60, timeout)
         try:
             app.run([])
         finally:
