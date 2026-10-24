@@ -27,6 +27,8 @@ jobs:
             gir1.2-adw-1 \
             gir1.2-webkit-6.0 \
             gir1.2-vte-3.91 \
+            gir1.2-gstreamer-1.0 \
+            gstreamer1.0-tools \
             gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad \

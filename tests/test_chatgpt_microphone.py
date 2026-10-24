@@ -42,7 +42,18 @@ try:
     Gst.init(None)
     HAS_URITRANSCODEBIN = Gst.ElementFactory.find("uritranscodebin") is not None
 except Exception:
-    HAS_URITRANSCODEBIN = False
+    import shutil
+    import subprocess
+
+    if shutil.which("gst-inspect-1.0"):
+        _gst_check = subprocess.run(
+            ["gst-inspect-1.0", "uritranscodebin"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        HAS_URITRANSCODEBIN = _gst_check.returncode == 0
+    else:
+        HAS_URITRANSCODEBIN = False
 
 from ia_workspace.ui.chatgpt_browser import ChatBrowser, network_session  # noqa: E402
 
@@ -144,17 +155,24 @@ class ChatGPTMicrophoneTests(unittest.TestCase):
             win = Adw.ApplicationWindow(application=a)
             setup_fn(a, win, results)
 
+        watchdog_id: list[int | None] = [None]
+
         def on_timeout() -> bool:
             results["timed_out"] = True
+            watchdog_id[0] = None
             app.quit()
             return GLib.SOURCE_REMOVE
 
         app.connect("activate", on_activate)
-        watchdog = GLib.timeout_add_seconds(timeout_seconds, on_timeout)
+        watchdog_id[0] = GLib.timeout_add_seconds(timeout_seconds, on_timeout)
         try:
             app.run([])
         finally:
-            GLib.source_remove(watchdog)
+            if watchdog_id[0] is not None:
+                try:
+                    GLib.source_remove(watchdog_id[0])
+                except Exception:
+                    pass
         return results
 
     @staticmethod
@@ -163,7 +181,8 @@ class ChatGPTMicrophoneTests(unittest.TestCase):
         results: dict,
         on_done,
         timeout_seconds: float = 12.0,
-        step_ms: int = 100,
+        initial_delay_ms: int = 500,
+        step_ms: int = 150,
     ) -> None:
         deadline = time.monotonic() + timeout_seconds
 
@@ -180,10 +199,17 @@ class ChatGPTMicrophoneTests(unittest.TestCase):
                 results["js"] = res
                 on_done()
 
-            browser.view.evaluate_javascript("window.testResult", -1, None, None, None, on_eval)
+            try:
+                browser.view.evaluate_javascript("window.testResult", -1, None, None, None, on_eval)
+            except Exception:
+                if time.monotonic() < deadline:
+                    GLib.timeout_add(step_ms, check)
+                else:
+                    results["js"] = "eval-error"
+                    on_done()
             return GLib.SOURCE_REMOVE
 
-        GLib.timeout_add(step_ms, check)
+        GLib.timeout_add(initial_delay_ms, check)
 
     def test_microphone_permission_granted_delivers_audio_stream(self) -> None:
         """Verifica que al autorizar la solicitud, el stream de audio simulado se entrega."""
