@@ -12,7 +12,7 @@ from gi.repository import Adw, Gio, GObject, Gtk, Pango
 
 from ia_workspace.brain.cli import cli_command
 from ia_workspace.brain.model import BrainError, DocumentMeta, Scope, categories_for, category
-from ia_workspace.brain.proposals import ProposalOperation, ProposalStatus
+from ia_workspace.brain.proposals import ProposalMeta, ProposalOperation, ProposalStatus
 from ia_workspace.ui import widgets as w
 from ia_workspace.ui.pages.base import Navigator, Page
 

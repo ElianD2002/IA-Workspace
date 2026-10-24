@@ -23,6 +23,7 @@ from ia_workspace.persistence.repositories import (
     TaskRepository,
     WorkspaceStateRepository,
 )
+from ia_workspace.quota.service import QuotaService
 from ia_workspace.services.chat_links import ChatLinkService
 from ia_workspace.services.history import HistoryService
 from ia_workspace.services.projects import ProjectService
