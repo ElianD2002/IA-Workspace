@@ -42,6 +42,21 @@ def is_loopback_http(uri: str) -> bool:
     return parts.scheme == "http" and (parts.hostname or "") in LOOPBACK_HOSTS
 
 
+def is_chatgpt_audio_origin(uri: str | None, *, allow_loopback_http: bool = False) -> bool:
+    """Valida si la URI pertenece exclusivamente al origen oficial de ChatGPT."""
+    if not uri:
+        return False
+    try:
+        parts = urlsplit(uri)
+    except ValueError:
+        return False
+    if parts.scheme == "https" and parts.hostname == "chatgpt.com":
+        return True
+    if allow_loopback_http and is_loopback_http(uri):
+        return True
+    return False
+
+
 def navigation_decision(uri: str, *, allow_loopback_http: bool = False) -> Decision:
     """Qué hacer con una navegación de la vista web (marco principal o iframe)."""
     try:

@@ -510,8 +510,7 @@ class WorkspaceView(Page):
 
     def _close_conversation(self) -> None:
         if self._browser is not None:
-            self._browser.link_id = self._browser.url = None
-            self._browser.view.load_uri("about:blank")
+            self._browser.close()
         if self._expanded is not None:
             self._expanded.force_close()
         self._show_chat_list()

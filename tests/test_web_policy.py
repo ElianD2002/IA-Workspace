@@ -9,6 +9,7 @@ from helpers import ROOT
 
 from ia_workspace.services.web_policy import (
     Decision,
+    is_chatgpt_audio_origin,
     navigation_decision,
     redact,
     resolve_for_view,
@@ -39,6 +40,40 @@ class NavigationPolicyTests(unittest.TestCase):
         self.assertIs(navigation_decision("http://192.168.1.5/", allow_loopback_http=True), Decision.BLOCK)
         self.assertIs(navigation_decision("http://127.0.0.1.evil.example/", allow_loopback_http=True),
                       Decision.BLOCK)
+
+
+class AudioOriginPolicyTests(unittest.TestCase):
+    def test_official_chatgpt_origin_is_accepted(self) -> None:
+        for uri in (
+            "https://chatgpt.com/",
+            "https://chatgpt.com/c/1234-abcd",
+            "https://chatgpt.com:443/c/5678",
+            "https://chatgpt.com/g/g-some-gpt",
+        ):
+            self.assertTrue(is_chatgpt_audio_origin(uri), uri)
+
+    def test_non_chatgpt_and_insecure_origins_are_rejected(self) -> None:
+        for bad in (
+            "http://chatgpt.com/",
+            "http://chatgpt.com/c/1234",
+            "https://evil-chatgpt.com/",
+            "https://subdomain.chatgpt.com/",
+            "https://auth0.openai.com/",
+            "https://apple.com",
+            "about:blank",
+            "data:text/html,abc",
+            "file:///tmp/index.html",
+            "",
+            None,
+            "no-es-una-url",
+        ):
+            self.assertFalse(is_chatgpt_audio_origin(bad), bad)
+
+    def test_loopback_audio_origin_only_when_explicitly_enabled(self) -> None:
+        self.assertTrue(is_chatgpt_audio_origin("http://127.0.0.1:9000/c/test", allow_loopback_http=True))
+        self.assertTrue(is_chatgpt_audio_origin("http://localhost:8080/", allow_loopback_http=True))
+        self.assertFalse(is_chatgpt_audio_origin("http://127.0.0.1:9000/c/test", allow_loopback_http=False))
+        self.assertFalse(is_chatgpt_audio_origin("http://192.168.1.50:8000/", allow_loopback_http=True))
 
 
 class TestBaseOverrideTests(unittest.TestCase):

@@ -26,6 +26,7 @@ import gi
 
 gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
 try:
     gi.require_version("WebKit", "6.0")
     from gi.repository import WebKit  # noqa: E402
@@ -35,9 +36,14 @@ except (ValueError, ImportError):  # falta gir1.2-webkit-6.0
     WebKit = None  # type: ignore[assignment]
     WEBKIT_AVAILABLE = False
 
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, GLib, Gtk  # noqa: E402
 
-from ia_workspace.services.web_policy import Decision, navigation_decision, test_base_url  # noqa: E402
+from ia_workspace.services.web_policy import (  # noqa: E402
+    Decision,
+    is_chatgpt_audio_origin,
+    navigation_decision,
+    test_base_url,
+)
 
 _sessions: dict[str, object] = {}
 
@@ -100,9 +106,13 @@ class ChatBrowser:
         on_changed: Callable[[], None],
         on_external: Callable[[str], None],
         allow_loopback_http: bool | None = None,
+        on_permission_prompt: (
+            Callable[[WebKit.UserMediaPermissionRequest, Callable[[bool], None]], None] | None
+        ) = None,
     ) -> None:
         self._on_changed = on_changed
         self._on_external = on_external
+        self._on_permission_prompt = on_permission_prompt
         if allow_loopback_http is None:
             allow_loopback_http = test_base_url(dict(os.environ)) is not None
         self._allow_loopback = allow_loopback_http
@@ -111,6 +121,7 @@ class ChatBrowser:
         self.error: str | None = None
         self.notice: str | None = None
         self.loading = False
+        self._last_permission_dialog: Adw.AlertDialog | None = None
 
         self.view = WebKit.WebView(network_session=session, hexpand=True, vexpand=True)
         self.view.set_focusable(True)
@@ -121,6 +132,11 @@ class ChatBrowser:
         settings.set_javascript_can_open_windows_automatically(False)
         settings.set_allow_file_access_from_file_urls(False)
         settings.set_allow_universal_access_from_file_urls(False)
+        settings.set_enable_media_stream(True)
+        settings.set_enable_webaudio(True)
+        settings.set_enable_webrtc(False)
+        if os.environ.get("IAW_MOCK_MEDIA_DEVICES") == "1":
+            settings.set_enable_mock_capture_devices(True)
 
         key_ctrl = Gtk.EventControllerKey.new()
         key_ctrl.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
@@ -193,10 +209,29 @@ class ChatBrowser:
 
     # ---- acciones -------------------------------------------------------------------
 
+    def stop_capture(self) -> None:
+        """Detiene cualquier captura activa de audio en la vista web."""
+        if WebKit is not None and hasattr(self.view, "set_microphone_capture_state"):
+            self.view.set_microphone_capture_state(WebKit.MediaCaptureState.NONE)
+
+    def close(self) -> None:
+        """Cierra la conversación actual y detiene la captura de audio."""
+        if self._last_permission_dialog is not None:
+            try:
+                self._last_permission_dialog.force_close()
+            except Exception:
+                pass
+            self._last_permission_dialog = None
+        self.stop_capture()
+        self.link_id = self.url = None
+        self.error = self.notice = None
+        self.view.load_uri("about:blank")
+
     def open(self, link_id: int, url: str) -> bool:
         """Carga la conversación. Si ya está abierta y sin errores, no la recarga."""
         if link_id == self.link_id and self.url == url and self.error is None:
             return False
+        self.stop_capture()
         self.link_id, self.url = link_id, url
         self.error = self.notice = None
         self.view.load_uri(url)
@@ -213,6 +248,7 @@ class ChatBrowser:
 
     def shutdown(self) -> None:
         """Termina el proceso web de esta vista (al cerrar IA Workspace)."""
+        self.stop_capture()
         self.view.terminate_web_process()
 
     @property
@@ -247,8 +283,59 @@ class ChatBrowser:
         return True
 
     def _on_permission_request(self, _view, request) -> bool:
-        request.deny()  # micrófono, cámara, notificaciones, ubicación…: nunca desde aquí
+        if (
+            WebKit is not None
+            and isinstance(request, WebKit.UserMediaPermissionRequest)
+            and request.props.is_for_audio_device
+            and not request.props.is_for_video_device
+        ):
+            uri = self.view.get_uri() or self.url or ""
+            if is_chatgpt_audio_origin(uri, allow_loopback_http=self._allow_loopback):
+                self._prompt_microphone_permission(request)
+                return True
+        request.deny()  # cualquier otro permiso u origen: denegado de inmediato
         return True
+
+    def _prompt_microphone_permission(self, request: WebKit.UserMediaPermissionRequest) -> None:
+        if self._last_permission_dialog is not None:
+            try:
+                self._last_permission_dialog.force_close()
+            except Exception:
+                pass
+            self._last_permission_dialog = None
+
+        def handle_response(allow: bool) -> None:
+            self._last_permission_dialog = None
+            if allow:
+                request.allow()
+            else:
+                request.deny()
+
+        if self._on_permission_prompt is not None:
+            self._on_permission_prompt(request, handle_response)
+            return
+
+        parent = self.view.get_root() or self.view
+        dialog = Adw.AlertDialog(
+            heading="¿Permitir acceso al micrófono?",
+            body=(
+                "ChatGPT solicita utilizar el micrófono para el dictado por voz. "
+                "El audio se procesará exclusivamente en tu sesión activa de ChatGPT."
+            ),
+        )
+        dialog.add_response("deny", "Denegar")
+        dialog.add_response("allow", "Permitir")
+        dialog.set_response_appearance("allow", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_response_appearance("deny", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("allow")
+        dialog.set_close_response("deny")
+
+        def on_dialog_response(_d: Adw.AlertDialog, response: str) -> None:
+            handle_response(response == "allow")
+
+        dialog.connect("response", on_dialog_response)
+        dialog.present(parent)
+        self._last_permission_dialog = dialog
 
     def _on_load_changed(self, _view, event) -> None:
         self.loading = event != WebKit.LoadEvent.FINISHED
@@ -265,6 +352,7 @@ class ChatBrowser:
         return True  # se muestra el aviso de IA Workspace en lugar de la página de error
 
     def _on_terminated(self, _view, _reason) -> None:
+        self.stop_capture()
         self.error = "La vista web se cerró inesperadamente. Recarga para continuar."
         self.loading = False
         self._on_changed()
