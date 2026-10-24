@@ -1,0 +1,99 @@
+name: CI y Distribución
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Verificación en Ubuntu 26.04
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar dependencias nativas del sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3-gi \
+            gir1.2-gtk-4.0 \
+            gir1.2-adw-1 \
+            gir1.2-webkit-6.0 \
+            gir1.2-vte-3.91 \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-pipewire \
+            desktop-file-utils
+          sudo apt-get install -y ruff 2>/dev/null || python3 -m pip install --break-system-packages ruff 2>/dev/null || true
+
+      - name: Validar formato y calidad de código
+        run: |
+          if command -v ruff >/dev/null 2>&1; then
+            ruff check .
+          fi
+          git diff --check
+
+      - name: Ejecutar suite de pruebas completa (Broadway)
+        run: |
+          ./scripts/check.sh
+
+      - name: Construir paquete reproducible de release
+        run: |
+          RELEASE_TAG="${GITHUB_REF_NAME:-v0.1.0-beta.1}"
+          ./scripts/package-release.sh "$RELEASE_TAG"
+
+      - name: Probar instalación desde el paquete generado en entorno aislado
+        run: |
+          TEST_SANDBOX="$(mktemp -d)"
+          tar -xzf dist/ia-workspace-*.tar.gz -C "$TEST_SANDBOX"
+          PKG_ROOT="$(find "$TEST_SANDBOX" -mindepth 1 -maxdepth 1 -type d)"
+          
+          # Simular HOME limpio
+          FAKE_HOME="$TEST_SANDBOX/userhome"
+          mkdir -p "$FAKE_HOME"
+          
+          # Probar instalación
+          HOME="$FAKE_HOME" "$PKG_ROOT/install.sh"
+          HOME="$FAKE_HOME" "$PKG_ROOT/scripts/instalador-local.sh" status
+          
+          # Probar desinstalación
+          HOME="$FAKE_HOME" "$PKG_ROOT/scripts/instalador-local.sh" uninstall
+          rm -rf "$TEST_SANDBOX"
+
+      - name: Preservar paquete para la release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dist
+          path: dist/
+          retention-days: 1
+
+  prerelease:
+    name: Publicar Prerelease en GitHub
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    steps:
+      - name: Descargar paquete probado
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist/
+
+      - name: Publicar Prerelease oficial
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            dist/ia-workspace-*.tar.gz
+            dist/ia-workspace-*.tar.gz.sha256

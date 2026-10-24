@@ -119,8 +119,24 @@ gi.require_version('Vte', '3.91')
 from gi.repository import Gtk, Adw, WebKit, Vte
 " || {
     echo "Error: Faltan librerías nativas del sistema (GTK4, Libadwaita, WebKitGTK 6.0 o VTE)." >&2
+    echo "" >&2
+    echo "Instala los paquetes necesarios según tu distribución:" >&2
+    echo "  Ubuntu 26.04 LTS / Debian:" >&2
+    echo "    sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-webkit-6.0 gir1.2-vte-3.91 gstreamer1.0-plugins-bad gstreamer1.0-plugins-good" >&2
+    echo "" >&2
+    echo "  Arch Linux / CachyOS:" >&2
+    echo "    sudo pacman -S python-gobject gtk4 libadwaita webkitgtk-6.0 vte4 gst-plugins-bad gst-plugins-good gst-plugin-pipewire" >&2
     exit 1
   }
+
+  # Comprobación consultiva de GStreamer uritranscodebin para dictado por voz en ChatGPT
+  if command -v gst-inspect-1.0 >/dev/null 2>&1; then
+    if ! gst-inspect-1.0 uritranscodebin >/dev/null 2>&1; then
+      echo "Aviso: 'uritranscodebin' de GStreamer no está disponible. El dictado por voz en ChatGPT requerirá:"
+      echo "  Ubuntu 26.04:  sudo apt install gstreamer1.0-plugins-bad"
+      echo "  Arch/CachyOS:  sudo pacman -S gst-plugins-bad"
+    fi
+  fi
 
   echo "== Instalando IA Workspace en $LIB_DIR..."
 

@@ -27,6 +27,11 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+release/
+packages/
+*.tar.gz
+*.sha256
+.install-manifest
 .venv/
 venv/
 .pytest_cache/

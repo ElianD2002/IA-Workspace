@@ -1,150 +1,136 @@
 # IA Workspace
 
-Aplicación nativa para Linux (GTK 4 + Libadwaita) para gestionar proyectos locales y
-coordinar agentes de IA —Claude Code, Codex y Google Antigravity— junto con
-conversaciones vinculadas de ChatGPT y memoria independiente por proyecto.
+Aplicación nativa para Linux (GTK 4 + Libadwaita) diseñada para gestionar proyectos locales y coordinar agentes de inteligencia artificial —Claude Code, OpenAI Codex y Google Antigravity— junto con sesiones integradas de ChatGPT, memoria documental compartida por proyecto y monitor unificado de consumo de suscripciones.
 
-> **Estado: fase 3A — cerebro compartido en Markdown.** Proyectos en SQLite, workspaces
-> independientes, terminales VTE persistentes, sesiones de Claude Code, Codex y Google
-> Antigravity mediante sus CLI oficiales, transferencia de prompts y memoria por proyecto
-> y global en archivos Markdown, consultable por los agentes bajo demanda. Todavía no hay
-> orquestación ni actualización automática de la memoria.
+> **Versión: v0.1.0-beta.1**
+> Probado y verificado en **Ubuntu 26.04 LTS** (GNOME 46+ / Wayland). Compatible con **Arch Linux / CachyOS** mediante paquetes oficiales de la distribución.
 
-## Requisitos (paquetes del sistema)
+---
 
-| Componente  | Mínimo | Probado |
-|-------------|--------|---------|
-| Python      | 3.12   | 3.14.4  |
-| GTK         | la que exija Libadwaita 1.8 | 4.22.2  |
-| Libadwaita  | 1.8 (`ShortcutsDialog`, `ToggleGroup`) | 1.9.0   |
-| PyGObject   | 3.48   | 3.56.2  |
-| SQLite      | 3.35   | 3.46.1  |
-| VTE (GTK 4) | 0.76   | 0.84.0  |
+## Características Principales
 
-En Ubuntu/Debian: `python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-vte-3.91`. No hay
-dependencias de pip. Sin `gir1.2-vte-3.91` la aplicación arranca, pero sin terminales.
+- **Diseño Nativo GNOME / Libadwaita**: Construido en Python con GTK 4, Libadwaita y tipografía del sistema, respetando las guías de interfaz GNOME HIG, soporte para modo claro/oscuro y diálogo de atajos.
+- **Terminales VTE Persistentes**: Pestañas de consola embebidas para interactuar con tus proyectos y agentes, con paletas de color Catppuccin (Mocha, Macchiato, Frappe, Latte) y copiado automático al seleccionar con el ratón.
+- **Orquestación de Agentes de IA**:
+  - Lanzamiento y supervisión de **Claude Code**, **OpenAI Codex** y **Google Antigravity** mediante sus CLI oficiales.
+  - Detección de sesión y estado de autenticación sin almacenar contraseñas ni API keys en la aplicación.
+  - Transferencia asistida de prompts con previsualización completa y registro histórico de tareas.
+- **Cerebro Compartido en Markdown**:
+  - Memoria documental local por proyecto y global (`~/.local/share/ia-workspace/cerebro`).
+  - Herramienta de línea de comandos `iaw-brain` para inyección de contexto bajo demanda.
+  - Flujo de revisión interactiva de propuestas para aprobar o rechazar modificaciones sugeridas por los agentes antes de aplicarlas.
+- **ChatGPT Integrado (WebKitGTK 6.0)**:
+  - Navegador web integrado confinado estrictamente al dominio oficial `chatgpt.com`.
+  - Soporte de **dictado por voz** nativo mediante PipeWire y GStreamer (`uritranscodebin`).
+  - Capacidad para **adjuntar capturas PNG del portapapeles** instantáneamente en las conversaciones, sin necesidad de guardar archivos temporales a mano.
+  - Selector de archivos tradicional mediante el diálogo nativo `Gtk.FileDialog`.
+- **Monitor de Consumo y Cuotas**: Visualización unificada del estado de cuotas de tus suscripciones de IA configuradas para planificar y optimizar sesiones de trabajo.
+- **Respaldos Seguros y Recuperación Offline**:
+  - Creación de copias de seguridad locales comprimidas (`.tar.gz`) con verificación de integridad.
+  - Asistente gráfico independiente de recuperación (`iaw-restore-gui`) y herramienta CLI (`iaw-restore`) para restauraciones seguras en frío.
+  - Mecanismo de exclusividad mutua mediante bloqueos de archivo para evitar la ejecución concurrente o la corrupción de datos.
 
-## Uso
+---
 
+## Requisitos del Sistema
+
+| Componente | Requisito mínimo | Probado |
+|---|---|---|
+| **Distribución** | Linux con entorno de escritorio moderno (GNOME recomendado) | Ubuntu 26.04 LTS |
+| **Python** | >= 3.12 | 3.14.4 |
+| **GTK** | 4.12+ | 4.22.4 |
+| **Libadwaita** | 1.8+ (`ShortcutsDialog`, `ToggleGroup`) | 1.9.1 |
+| **PyGObject** | 3.48+ | 3.56.2 |
+| **WebKitGTK** | 6.0 | 2.46+ |
+| **VTE (GTK 4)** | 0.76+ | 0.84.0 |
+| **GStreamer** | 1.20+ (con plugins good y bad para dictado) | 1.24+ |
+
+### Dependencias por Distribución
+
+IA Workspace utiliza las librerías nativas del sistema operativo; **no requiere paquetes de Python compilados con pip**.
+
+#### Ubuntu 26.04 LTS / Debian
 ```bash
-scripts/run.sh               # ejecutar desde el código fuente
-scripts/run.sh --simulated   # con agentes simulados, para probar sesiones concurrentes
-scripts/check.sh             # entorno + compilación + pruebas + prueba de interfaz
-scripts/screenshots.sh       # capturas de cada pantalla en var/screenshots/
+sudo apt update
+sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 \
+                 gir1.2-webkit-6.0 gir1.2-vte-3.91 \
+                 gstreamer1.0-plugins-bad gstreamer1.0-plugins-good \
+                 gstreamer1.0-pipewire desktop-file-utils
 ```
 
-Desde el código fuente, todos los datos (base SQLite, capturas, temporales de pruebas)
-se guardan en `var/` dentro del repositorio. Instalada, la aplicación usa
-`$XDG_DATA_HOME/ia-workspace/`. `IAW_DATA_DIR` permite elegir otra carpeta.
-
-### Lanzador e icono en GNOME
-
-`scripts/run.sh` funciona sin instalar nada, y la ventana ya muestra el icono oficial. Para
-que IA Workspace aparezca en el menú de aplicaciones, el dock y Alt+Tab con su icono,
-instala el lanzador en tu carpeta personal (no usa `sudo` ni toca rutas del sistema):
-
+#### Arch Linux / CachyOS (Compatibilidad preliminar)
 ```bash
-scripts/desktop-launcher.sh install     # ~/.local/share/applications + ~/.local/share/icons/hicolor
-scripts/desktop-launcher.sh status
-scripts/desktop-launcher.sh uninstall   # quita exactamente esos archivos
+sudo pacman -S python-gobject gtk4 libadwaita webkitgtk-6.0 vte4 \
+               gst-plugins-bad gst-plugins-good gst-plugin-pipewire \
+               desktop-file-utils
 ```
 
-El lanzador ejecuta `scripts/run.sh` de esta copia del repositorio; si la mueves de
-carpeta, vuelve a instalarlo. Los tamaños del icono (`data/icons/hicolor/`) se generan a
-partir del original aprobado (`data/icons/app-icon.png`, que nunca se modifica) con
-`python3 scripts/build_icons.py`; `scripts/check.sh` comprueba que estén al día.
+---
 
-## Agentes
+## Instalación y Uso
 
-| Herramienta | CLI oficial | Estado de sesión | Inicio de sesión |
-|---|---|---|---|
-| Claude Code | `claude` | `claude auth status --json` | `claude auth login` |
-| Codex | `codex --no-daemon` | `codex login status` | `codex login` |
-| Google Antigravity | `agy` | — (lo gestiona la propia CLI) | dentro de la sesión |
+### 1. Instalación Nativa de Usuario (Recomendada)
 
-En el workspace, el botón **+** de sesiones abre una terminal y su flecha **⌄** permite
-iniciar un agente. La CLI se lanza en la carpeta del proyecto, sin opciones que omitan
-permisos ni aprobaciones, y con tu suscripción e inicio de sesión. El estado de sesión
-solo se consulta al abrir ese menú o con **Preferencias → Integraciones → Comprobar**.
-
-### Transferir un prompt a un agente
-
-En el panel Prompt, elige el agente en **Asignar a** y pulsa **Transferir…**. Un diálogo
-de revisión muestra el proyecto, el agente y el prompt completo antes de confirmar nada.
-Al confirmar se abre una sesión **nueva** del agente en la carpeta del proyecto, con el
-prompt como instrucción inicial mediante el mecanismo oficial de su CLI (nunca se escribe
-después en una sesión ya en marcha). Claude Code, Codex y Antigravity admiten los tres
-este mecanismo; si un agente no lo tuviera, el botón ofrecería «Copiar y abrir agente» en
-su lugar. Cada transferencia queda registrada —proyecto, agente, prompt completo, sesión
-y fecha— y aparece en la pestaña **Tareas** del panel derecho, desde donde se puede volver
-a la sesión. El registro nunca da por completada una tarea: solo indica si el prompt se
-envió o se copió; el progreso real se sigue en el estado de la sesión.
-
-### Conversaciones de ChatGPT
-
-En el panel ChatGPT de cada proyecto, **Vincular conversación** guarda el enlace de una
-conversación (`chatgpt.com/c/…`, `chatgpt.com/g/…/c/…`), de un enlace compartido
-(`chatgpt.com/share/…`) o de sus equivalentes históricos en `chat.openai.com`. Se abre en
-tu navegador con tu sesión habitual. IA Workspace no lee su contenido ni pide credenciales.
-Cada proyecto tiene su propia lista: renombrar, copiar el enlace y desvincular están en el
-menú **⋮** de cada conversación.
-
-Al pulsar una conversación se abre **dentro de IA Workspace** (WebKitGTK 6.0, paquete
-`gir1.2-webkit-6.0`): inicias sesión una vez en el sitio oficial de ChatGPT y la sesión se
-guarda en el almacenamiento web propio de la aplicación, compartido por todos los proyectos.
-El panel tiene controles para volver a la lista, recargar, abrir en el navegador y una
-**vista ampliada**; con la ventana estrecha, un botón en la cabecera la abre. **Preferencias →
-Integraciones → Borrar datos web…** cierra esa sesión. Sin WebKitGTK, las conversaciones se
-abren en el navegador predeterminado.
-
-Para probar el inicio de sesión de forma aislada, sin tocar los datos de la aplicación:
-`python3 scripts/chatgpt_poc.py` (y `--clear` para borrar sus datos).
-
-## Cerebro compartido (memoria en Markdown)
-
-La pantalla **Cerebro compartido** (Alt+5) guarda el conocimiento de cada proyecto —estado
-actual, arquitectura, documentación por módulo, decisiones, reglas, próximos pasos y
-resúmenes de sesiones— y, aparte, una **memoria global** con tus preferencias generales.
-Cada documento es un archivo `.md` en `$XDG_DATA_HOME/ia-workspace/brain/` (desde el
-código, `var/brain/`); IA Workspace nunca escribe en tus repositorios ni modifica sus
-`AGENTS.md` o `CLAUDE.md`. Cada memoria tiene un `INDEX.md` ligero con una línea por
-documento.
-
-Quitar un proyecto del registro conserva su memoria. Si vuelves a agregar **la misma
-carpeta**, el diálogo te pide elegir entre recuperar la memoria anterior o empezar con una
-nueva; nunca se recupera por coincidir el nombre, y si la carpeta parece distinta (se
-reemplazó o se restauró de una copia) hay que confirmarlo expresamente.
-
-Los agentes no reciben la memoria: **Copiar instrucción** da una referencia breve al índice
-y a la consulta bajo demanda, que funciona desde la carpeta del proyecto:
+El instalador funciona **100% en el espacio de usuario** (en `~/.local`), sin requerir permisos de `sudo`:
 
 ```bash
-scripts/iaw-brain list                      # una línea por documento
-scripts/iaw-brain search "fechas utc"       # resultados con un fragmento
-scripts/iaw-brain read decisiones/adr-006-fechas-en-utc.md
-scripts/iaw-brain list --global             # memoria global
+# Desde el archivo descomprimido de la release o el repositorio:
+scripts/instalador-local.sh install
 ```
 
-## Atajos
+Este proceso:
+1. Valida las librerías del sistema y los bloqueos exclusivos.
+2. Copia la aplicación a `~/.local/share/ia-workspace-app`.
+3. Instala los binarios `ia-workspace`, `iaw-restore-gui` y utilidades auxiliares en `~/.local/bin`.
+4. Configura los lanzadores `.desktop` oficiales en `~/.local/share/applications`.
+5. Instala los iconos oficiales en todos los tamaños estándar hicolor (16x16 hasta 512x512).
 
-| Acción | Atajo |
-|---|---|
-| Inicio · Proyectos · Agentes · Tareas · Cerebro · Historial | Alt+1 … Alt+6 |
-| Agregar proyecto | Ctrl+O |
-| Nuevo prompt | Ctrl+N |
-| Nueva terminal en el proyecto activo | Ctrl+Mayús+T |
-| Barra lateral | F9 |
-| Panel de tareas y memoria (derecho) | Mayús+F9 |
-| Preferencias · Atajos | Ctrl+, · Ctrl+? |
-| Salir | Ctrl+Q |
+### 2. Comprobar el Estado de la Instalación
 
-## Principios
+```bash
+scripts/instalador-local.sh status
+```
 
-- Cada herramienta usa **su propio inicio de sesión y suscripción**. IA Workspace no pide
-  claves API, no guarda credenciales ni tokens y no usa APIs de pago.
-- Registrar un proyecto **no modifica su carpeta**: solo se lee (`.git/HEAD`, archivos de stack).
-- Las terminales y agentes siguen trabajando al **cambiar de proyecto o minimizar**. Al
-  cerrar por completo con sesiones activas, se pide confirmación y se finalizan de forma
-  ordenada, junto con los procesos que hayan iniciado (y solo esos).
+### 3. Actualización
 
-Más detalles en [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Para actualizar a una versión superior, simplemente descarga la nueva versión y ejecuta:
+
+```bash
+scripts/instalador-local.sh install
+```
+El instalador cuenta con sistema de *rollback* automático y conserva íntegros tus datos, proyectos, base de datos SQLite y sesiones web en `~/.local/share/ia-workspace`.
+
+### 4. Desinstalación
+
+```bash
+scripts/instalador-local.sh uninstall
+```
+Elimina limpiamente los binarios, lanzadores e iconos registrados en el manifiesto de instalación. **Tus datos de proyectos, configuraciones y respaldos se conservan protegidos** en tu carpeta de usuario.
+
+---
+
+## Ejecución desde el Código Fuente
+
+Si prefieres ejecutar la aplicación directamente en modo desarrollo sin instalarla:
+
+```bash
+scripts/run.sh               # Ejecución normal (datos de prueba aislados en var/)
+scripts/run.sh --simulated   # Con agentes simulados (ideal para entornos de prueba)
+./scripts/check.sh           # Batería completa de pruebas (compilación, lógica e interfaz en Broadway)
+```
+
+---
+
+## Limitaciones Conocidas de la Versión Beta
+
+- **Dictado por voz en ChatGPT**: Requiere que la librería GStreamer contenga el elemento `uritranscodebin` (proporcionado por `gstreamer1.0-plugins-bad` en Ubuntu o `gst-plugins-bad` en Arch/CachyOS).
+- **Inicio de sesión en ChatGPT**: El primer inicio de sesión debe realizarse manualmente en la vista web integrada de ChatGPT. Las cookies de sesión se conservan en el sandbox de WebKitGTK del usuario.
+- **Compatibilidad con distribuciones**: La suite de pruebas de interfaz automatizada se ejecuta nativamente sobre Ubuntu 26.04. En distribuciones basadas en Arch o CachyOS, se agradece el reporte de incidencias o comportamientos específicos en el rastreador de problemas.
+
+---
+
+## Licencia
+
+Este proyecto está distribuido bajo la licencia **GNU General Public License v3.0 o posterior (GPL-3.0-or-later)**. Consulta el archivo [LICENSE](LICENSE) para más detalles.
+
+Los temas de color Catppuccin incluidos se rigen bajo su respectiva licencia MIT. Los iconos del tema hicolor y recursos gráficos de la aplicación son creaciones originales de IA Workspace distribuidas conjuntamente bajo los términos de la licencia GPLv3+.
